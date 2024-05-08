@@ -1,5 +1,4 @@
 import math
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -24,16 +23,12 @@ def loss_function(x, x_prime, mean, log_var):
     return kl_divergence + F.mse_loss(x, x_prime, reduction='sum')
 
 
-#def reconstruction_score(x, x_prime):
- #   return torch.sqrt(F.mse_loss(x, x_prime))
-
-
 class ResizedConv2d(nn.Module):  # Convolutional 2d block preceded by an interpolation operation to perform upsampling
 
-    def __init__(self, in_channels, out_channels, kernel_size, scale_factor):
+    def __init__(self, in_channels, out_channels, kernel_size, scale_factor, stride=1, padding=1):
         super().__init__()
         self.scale_factor = scale_factor
-        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size, stride=1, padding=1)
+        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size, stride=stride, padding=padding)
 
     def forward(self, x):
         x = F.interpolate(x, scale_factor=self.scale_factor, mode='nearest')
@@ -80,14 +75,14 @@ class Resnet18Decoder(nn.Module):
         self.res3 = self._create_residual_layer(256, 2, 2)
         self.res2 = self._create_residual_layer(128, 2, 2)
         self.res1 = self._create_residual_layer(64, 2, 1)
-        self.conv1 = ResizedConv2d(64, 64, 3, 2)  # max pooling layer
-        self.conv2 = nn.Conv2d(64, 64, 7, 2, 1)
+        self.conv1 = ResizedConv2d(64, 64, 3, 1.75)  # max pooling layer
+        self.conv2 = ResizedConv2d(64, 3, 7, 4.08)
 
     def _create_residual_layer(self, in_channels, num_blocks, stride):
         strides = [stride] + [1]*(num_blocks-1)
         layers = []
         for strd in reversed(strides):
-            layers += ResidualBlockDec(in_channels, strd)
+            layers += [ResidualBlockDec(in_channels, strd)]
         return nn.Sequential(*layers)  # "unfolds" the list of layers
 
     def forward(self, z):
@@ -99,7 +94,8 @@ class Resnet18Decoder(nn.Module):
         x = self.res2(x)
         x = self.res1(x)
         x = self.conv1(x)
-        x = torch.sigmoid(self.conv2(x))
+        x = self.conv2(x)
+        x = torch.sigmoid(x)
         x = x.view(x.size(0), 3, 224, 224)
         return x
 
@@ -110,21 +106,23 @@ class Resnet18VAE(nn.Module):
         super(Resnet18VAE, self).__init__()
         self.device = device
 
-        self.encoder = nn.Sequential(*list(models.resnet18(weights='IMAGENET1K_V1').children())[-1])  # remove original fc layer
+        self.encoder = nn.Sequential(*list(models.resnet18(weights='IMAGENET1K_V1').children())[:-1])  # remove original fc layer
         self.hidden_fc1 = nn.Linear(512, hidden_dim)
         self.bn1 = nn.BatchNorm1d(hidden_dim)  # batch normalization of a fc layer before passing x to mean and logvar layers
 
-        self.mean_layer = nn.Linear(512, latent_dim)
-        self.log_var_layer = nn.Linear(512, latent_dim)
+        self.mean_layer = nn.Linear(hidden_dim, latent_dim)
+        self.log_var_layer = nn.Linear(hidden_dim, latent_dim)
 
         self.decoder = Resnet18Decoder(latent_dim=latent_dim)
 
-    def reparametrize(self, mean, dev_std):
-        epsilon = torch.rand_like(dev_std).to(self.device)  # normal standard random variable
-        return dev_std * epsilon + mean  # z = std_dev(x)*epsilon + mean(x)
+    def reparametrize(self, mean, log_var):
+        std = torch.exp(log_var/2)
+        epsilon = torch.rand_like(std).to(self.device)  # normal standard random variable
+        return std * epsilon + mean  # z = std_dev(x)*epsilon + mean(x)
 
     def encode(self, x):
         x = self.encoder(x)
+        x = x.view(x.size(0), -1)
         x = torch.relu(self.bn1(self.hidden_fc1(x)))
         mean, log_var = self.mean_layer(x), self.log_var_layer(x)
         return mean, log_var
@@ -139,18 +137,9 @@ class Resnet18VAE(nn.Module):
         x_prime = self.decode(z)
         return x_prime, mean, log_var
 
-    def train_model(self, tr_loader, v_loader, t_loader, optim, num_epochs, use_test=False):
+    def train_model(self, tr_loader, optim, num_epochs):
 
-        if use_test:
-            loader = t_loader
-            desc = 'testing the model...'
-            output_print = ("Epoch [{}/{}], train loss: {:.4f}, train reconstruction score: {:.4f}, test loss: {:.4f},"
-                            " test reconstruction score: {:.4f}")
-        else:
-            loader = v_loader
-            desc = 'validating the model...'
-            output_print = ("Epoch [{}/{}], train loss: {:.4f}, train reconstruction score: {:.4f}, val loss: {:.4f},"
-                            " val reconstruction score: {:.4f}")
+        output_print = 'Epoch [{}/{}], train loss: {:.4f}, train reconstruction score: {:.4f}'
 
         for epoch in range(num_epochs):
 
@@ -158,7 +147,7 @@ class Resnet18VAE(nn.Module):
             train_loss = 0.0
             train_acc = 0.0
 
-            for batch in tqdm(tr_loader, desc='training the model...'):
+            for batch, labels in tqdm(tr_loader, desc='training the model...'):
 
                 batch = batch.to(self.device)
 
@@ -169,10 +158,31 @@ class Resnet18VAE(nn.Module):
                 optim.step()
 
                 train_loss += loss.item()
-                train_acc += torch.sum(torch.pow((outputs-batch), 2))
+                mse = F.mse_loss(batch, outputs, reduction='sum')
+                train_acc += mse.item()
 
             train_loss = train_loss/len(tr_loader.dataset)
             train_acc = math.sqrt(train_acc/len(tr_loader.dataset))  # reconstruction score
+
+            print(output_print.format(epoch+1, num_epochs, train_loss, train_acc))
+            torch.cuda.empty_cache()
+
+    def test_model(self, v_loader, t_loader, num_epochs, use_test=True):
+
+        for epoch in range(num_epochs):
+
+            if use_test:
+                loader = t_loader
+                desc = 'testing the model...'
+                output_print = (
+                    "Epoch [{}/{}], train loss: {:.4f}, train reconstruction score: {:.4f}, test loss: {:.4f},"
+                    " test reconstruction score: {:.4f}")
+            else:
+                loader = v_loader
+                desc = 'validating the model...'
+                output_print = (
+                    "Epoch [{}/{}], train loss: {:.4f}, train reconstruction score: {:.4f}, val loss: {:.4f},"
+                    " val reconstruction score: {:.4f}")
 
             self.eval()
 
@@ -180,18 +190,17 @@ class Resnet18VAE(nn.Module):
             current_acc = 0.0
 
             with torch.no_grad():
-                for batch in tqdm(loader, desc=desc):
-
+                for batch, labels in tqdm(loader, desc=desc):
                     batch = batch.to(self.device)
 
                     outputs, mean, log_var = self.forward(batch)
                     loss = loss_function(batch, outputs, mean, log_var)
 
                     current_loss += loss.item()
-                    current_acc += torch.sum(torch.pow((outputs-batch), 2))
+                    current_acc += torch.sum(torch.pow((outputs - batch), 2))
 
-                current_loss = current_loss/len(loader.dataset)
-                current_acc = math.sqrt(current_acc/len(loader.dataset))  # reconstruction score
+                current_loss = current_loss / len(loader.dataset)
+                current_acc = math.sqrt(current_acc / len(loader.dataset))  # reconstruction score
 
-            print(output_print.format(epoch+1, num_epochs, train_loss, train_acc, current_loss, current_acc))
-
+            print(output_print.format(epoch + 1, num_epochs, current_loss, current_acc))
+            torch.cuda.empty_cache()
