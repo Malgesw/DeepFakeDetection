@@ -5,15 +5,10 @@ import torchvision.models as models
 from sklearn.manifold import TSNE
 from torchvision import transforms
 from torchvision.datasets import ImageFolder
-from tqdm.autonotebook import tqdm
 from torch.utils.data import DataLoader
 import matplotlib.pyplot as plt
-import matplotlib.image as mpimg
-import numpy as np
-import wandb
-import plotly.express as px
-from model import Resnet18VAE
-
+# from VAEmodelOld import Resnet18VAE
+from VAEmodel import Resnet18VAE
 
 def main():
 
@@ -44,11 +39,12 @@ def main():
 
     torch.cuda.empty_cache()
 
-    resnet18_vae = Resnet18VAE(dev, 256, 1024).to(dev)
-    #pytorch_total_params = sum(p.numel() for p in resnet18_vae.parameters())
-    #print(pytorch_total_params)
+    #resnet18_vae = Resnet18VAE(dev, 256, 1024).to(dev)
+    resnet18_vae = Resnet18VAE(dev, 10, 2048).to(dev)
+    pytorch_total_params = sum(p.numel() for p in resnet18_vae.parameters())
+    print(pytorch_total_params)
     optimizer = torch.optim.Adam(resnet18_vae.parameters(), lr=3e-4)
-    resnet18_vae.train_model(train_loader, optimizer, num_epochs=20)
+    resnet18_vae.train_model(train_loader, optimizer, num_epochs=20, project_name='VAEresnet18_train')
     #resnet18_vae.test_model(test_loader, test_loader, num_epochs=15, use_test=True)
 
     for batch, labels in train_loader:

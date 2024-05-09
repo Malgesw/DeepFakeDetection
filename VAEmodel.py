@@ -4,18 +4,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchvision
 import torchvision.models as models
-from sklearn.manifold import TSNE
-from torchvision import transforms
 from tqdm.autonotebook import tqdm
-from torch.utils.data import DataLoader
-import matplotlib.pyplot as plt
-import numpy as np
 import wandb
-import plotly.express as px
+from typing import Tuple
 
-'''
-code inspired by julianstastny's implementation (https://github.com/julianstastny/VAE-ResNet18-PyTorch/blob/master/model.py)
-'''
+# same VAE, but the decoder follows an alternative implementation
 
 
 def loss_function(x, x_prime, mean, log_var):
@@ -23,78 +16,66 @@ def loss_function(x, x_prime, mean, log_var):
     return kl_divergence + F.mse_loss(x, x_prime, reduction='sum')
 
 
-class ResizedConv2d(nn.Module):  # Convolutional 2d block preceded by an interpolation operation to perform upsampling
-
-    def __init__(self, in_channels, out_channels, kernel_size, scale_factor, stride=1, padding=1):
+class ReverseResidualBlock(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size, stride, padding):
         super().__init__()
-        self.scale_factor = scale_factor
-        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size, stride=stride, padding=padding)
+        self.batch1 = nn.BatchNorm2d(in_channels)
+        self.conv1 = nn.ConvTranspose2d(in_channels, in_channels, kernel_size=kernel_size, stride=stride, padding=padding)
+        self.batch2 = nn.BatchNorm2d(in_channels)
+        self.conv2 = nn.ConvTranspose2d(in_channels, out_channels, kernel_size=kernel_size, stride=stride, padding=padding)
 
     def forward(self, x):
-        x = F.interpolate(x, scale_factor=self.scale_factor, mode='nearest')
-        x = self.conv(x)
+        x = self.batch1(x)
+        x = self.conv1(x)
+        x = nn.functional.relu(x)
+        x = self.batch2(x)
+        x = self.conv2(x)
         return x
 
 
-class ResidualBlockDec(nn.Module):
-
-    def __init__(self, in_channels, stride=1):
+class UnpoolingBlock(nn.Module):
+    def __init__(self, size: Tuple[int, int]):
         super().__init__()
-
-        channels = int(in_channels/stride)
-
-        self.conv2 = nn.Conv2d(in_channels, in_channels, kernel_size=3, stride=1, padding=1, bias=False)
-        self.bn2 = nn.BatchNorm2d(in_channels)
-
-        if stride == 1:
-            self.conv1 = nn.Conv2d(in_channels, channels, kernel_size=3, stride=1, padding=1, bias=False)
-            self.bn1 = nn.BatchNorm2d(channels)
-            self.residual = nn.Sequential()
-        else:
-            self.conv1 = ResizedConv2d(in_channels, channels, kernel_size=3, scale_factor=stride)
-            self.bn1 = nn.BatchNorm2d(channels)
-            self.residual = nn.Sequential(
-                ResizedConv2d(in_channels, channels, kernel_size=3, scale_factor=stride),
-                nn.BatchNorm2d(channels)
-            )
+        self.size = size
 
     def forward(self, x):
-        out = torch.relu(self.bn2(self.conv2(x)))
-        out = self.bn1(self.conv1(out))
-        out += self.residual(x)
-        out = torch.relu(out)
-        return out
+        x = nn.functional.interpolate(x, size=self.size)
+        return x
 
 
 class Resnet18Decoder(nn.Module):
     def __init__(self, latent_dim):
         super().__init__()
-
-        self.fc2 = nn.Linear(latent_dim, 512)
-        self.res4 = self._create_residual_layer(512, 2, 2)
-        self.res3 = self._create_residual_layer(256, 2, 2)
-        self.res2 = self._create_residual_layer(128, 2, 2)
-        self.res1 = self._create_residual_layer(64, 2, 1)
-        self.conv1 = ResizedConv2d(64, 64, 3, 1.75)  # max pooling layer
-        self.conv2 = ResizedConv2d(64, 3, 7, 4.08)
-
-    def _create_residual_layer(self, in_channels, num_blocks, stride):
-        strides = [stride] + [1]*(num_blocks-1)
-        layers = []
-        for strd in reversed(strides):
-            layers += [ResidualBlockDec(in_channels, strd)]
-        return nn.Sequential(*layers)  # "unfolds" the list of layers
+        self.fc1 = nn.Linear(latent_dim, 512)
+        self.unpool1 = UnpoolingBlock(size=(2, 2))
+        self.res1 = ReverseResidualBlock(512, 512, 3, 1, 1)
+        self.res2 = ReverseResidualBlock(512, 256, 3, 2, 1)
+        self.res3 = ReverseResidualBlock(256, 256, 3, 1, 1)
+        self.res4 = ReverseResidualBlock(256, 128, 3, 2, 1)
+        self.res5 = ReverseResidualBlock(128, 128, 3, 1, 1)
+        self.res6 = ReverseResidualBlock(128, 64, 3, 2, 1)
+        self.res7 = ReverseResidualBlock(64, 64, 3, 1, 1)
+        self.res8 = ReverseResidualBlock(64, 64, 3, 1, 1)
+        self.unpool2 = UnpoolingBlock(size=(112, 112))
+        self.conv1 = nn.ConvTranspose2d(64, 3, 7, 2, 3)
+        self.unpool3 = UnpoolingBlock(size=(224, 224))
 
     def forward(self, z):
-        x = self.fc2(z)
-        x = x.view(z.size(0), 512, 1, 1)
-        x = F.interpolate(x, scale_factor=4)
-        x = self.res4(x)
-        x = self.res3(x)
-        x = self.res2(x)
-        x = self.res1(x)
+        x = self.fc1(z)
+        x = x.view(x.size(0), 512, 1, 1)
+        x = self.unpool1(x)
+        x = nn.functional.relu(x)
+        x = nn.functional.relu(self.res1(x))
+        x = nn.functional.relu(self.res2(x))
+        x = nn.functional.relu(self.res3(x))
+        x = nn.functional.relu(self.res4(x))
+        x = nn.functional.relu(self.res5(x))
+        x = nn.functional.relu(self.res6(x))
+        x = nn.functional.relu(self.res7(x))
+        x = nn.functional.relu(self.res8(x))
+        x = nn.functional.relu(self.unpool2(x))
         x = self.conv1(x)
-        x = self.conv2(x)
+        x = self.unpool3(x)
         x = torch.sigmoid(x)
         x = x.view(x.size(0), 3, 224, 224)
         return x
@@ -137,8 +118,9 @@ class Resnet18VAE(nn.Module):
         x_prime = self.decode(z)
         return x_prime, mean, log_var
 
-    def train_model(self, tr_loader, optim, num_epochs):
+    def train_model(self, tr_loader, optim, num_epochs, project_name):
 
+        wandb.init(project=project_name, entity='niccolomalgeri')
         output_print = 'Epoch [{}/{}], train loss: {:.4f}, train reconstruction score: {:.4f}'
 
         for epoch in range(num_epochs):
@@ -164,28 +146,33 @@ class Resnet18VAE(nn.Module):
             train_loss = train_loss/len(tr_loader.dataset)
             train_acc = math.sqrt(train_acc/len(tr_loader.dataset))  # reconstruction score
 
+            wandb.log({'epoch': epoch + 1, 'training loss': train_loss, 'training reconstruction score': train_acc})
+
             print(output_print.format(epoch+1, num_epochs, train_loss, train_acc))
             torch.cuda.empty_cache()
 
-    def test_model(self, v_loader, t_loader, num_epochs, use_test=True):
+        wandb.finish()
+
+    def test_model(self, v_loader, t_loader, num_epochs, project_name, use_test=True):
+
+        wandb.init(project=project_name, entity='niccolomalgeri')
 
         for epoch in range(num_epochs):
 
             if use_test:
                 loader = t_loader
                 desc = 'testing the model...'
-                output_print = (
-                    "Epoch [{}/{}], train loss: {:.4f}, train reconstruction score: {:.4f}, test loss: {:.4f},"
-                    " test reconstruction score: {:.4f}")
+                wandb_print_loss = 'test loss'
+                wandb_print_acc = 'test reconstruction score'
             else:
                 loader = v_loader
                 desc = 'validating the model...'
-                output_print = (
-                    "Epoch [{}/{}], train loss: {:.4f}, train reconstruction score: {:.4f}, val loss: {:.4f},"
-                    " val reconstruction score: {:.4f}")
+                wandb_print_loss = 'val loss'
+                wandb_print_acc = 'val reconstruction score'
+
+            output_print = "Epoch [{}/{}], " + wandb_print_loss + ": {:.4f}, " + wandb_print_acc + ": {:.4f}"
 
             self.eval()
-
             current_loss = 0.0
             current_acc = 0.0
 
@@ -202,5 +189,9 @@ class Resnet18VAE(nn.Module):
                 current_loss = current_loss / len(loader.dataset)
                 current_acc = math.sqrt(current_acc / len(loader.dataset))  # reconstruction score
 
+            wandb.log({'epoch': epoch + 1, wandb_print_loss: current_loss, wandb_print_acc: current_acc})
+
             print(output_print.format(epoch + 1, num_epochs, current_loss, current_acc))
             torch.cuda.empty_cache()
+
+        wandb.finish()
