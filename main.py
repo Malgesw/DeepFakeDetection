@@ -7,8 +7,8 @@ from torchvision import transforms
 from torchvision.datasets import ImageFolder
 from torch.utils.data import DataLoader
 import matplotlib.pyplot as plt
-# from VAEmodelOld import Resnet18VAE
-from VAEmodel import Resnet18VAE
+from VAEmodel import ResNetVAE
+
 
 def main():
 
@@ -23,7 +23,7 @@ def main():
 
     train_set = ImageFolder(train_path, transform=transform)
 
-    train_size = int(0.1 * len(train_set))
+    train_size = int(0.7 * len(train_set))
     val_size = len(train_set) - train_size
     train_set, validation_set = torch.utils.data.random_split(train_set, [train_size, val_size])
 
@@ -37,14 +37,13 @@ def main():
     else:
         dev = 'cpu'
 
-    torch.cuda.empty_cache()
+    #torch.cuda.empty_cache()
 
-    #resnet18_vae = Resnet18VAE(dev, 256, 1024).to(dev)
-    resnet18_vae = Resnet18VAE(dev, 10, 2048).to(dev)
+    resnet18_vae = ResNetVAE(dev, 1024, 768, 256).to(dev)
     pytorch_total_params = sum(p.numel() for p in resnet18_vae.parameters())
     print(pytorch_total_params)
     optimizer = torch.optim.Adam(resnet18_vae.parameters(), lr=3e-4)
-    resnet18_vae.train_model(train_loader, optimizer, num_epochs=20, project_name='VAEresnet18_train')
+    resnet18_vae.train_model(train_loader, optimizer, num_epochs=5, project_name='VAEresnet18_train_new')
     #resnet18_vae.test_model(test_loader, test_loader, num_epochs=15, use_test=True)
 
     for batch, labels in train_loader:
@@ -52,6 +51,7 @@ def main():
         break
 
     img = sample[0]
+    output, m, v = resnet18_vae.forward(sample.to(dev))
     tr = transforms.Resize(32)
     img = tr(img)
     img = img.permute(1, 2, 0).detach().numpy()
@@ -59,7 +59,6 @@ def main():
     plt.imshow(norm_img, interpolation='bicubic')
     plt.show()
 
-    output, m, v = resnet18_vae.forward(sample.to(dev))
     img2 = output[0]
     img2 = tr(img2)
     img2 = img2.permute(1, 2, 0).cpu().detach().numpy()
