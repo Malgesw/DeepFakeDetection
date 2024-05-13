@@ -15,7 +15,9 @@ import wandb
 
 def loss_function(x, x_prime, mean, log_var):
     kl_divergence = - 0.5 * torch.sum(1 + log_var - mean.pow(2) - log_var.exp())
-    return F.mse_loss(x_prime, x, reduction='sum') + kl_divergence
+    #recon_loss = F.binary_cross_entropy(x_prime, x, reduction='sum')
+    recon_loss = F.mse_loss(x_prime, x, reduction='sum')
+    return recon_loss + kl_divergence
 
 
 class ResNetVAE(nn.Module):
@@ -107,9 +109,11 @@ class ResNetVAE(nn.Module):
         x_prime = self.decode(z)
         return x_prime, mu, logvar
 
-    def train_model(self, tr_loader, optim, num_epochs, project_name):
+    def train_model(self, tr_loader, optim, num_epochs, project_name='', wandb_log=False):
 
-        wandb.init(project=project_name, entity='niccolomalgeri')
+        if wandb_log:
+            wandb.init(project=project_name, entity='niccolomalgeri')
+
         output_print = 'Epoch [{}/{}], train loss: {:.4f}, train reconstruction score: {:.4f}'
 
         for epoch in range(num_epochs):
@@ -119,6 +123,7 @@ class ResNetVAE(nn.Module):
             train_acc = 0.0
 
             for batch, labels in tqdm(tr_loader, desc='training the model...'):
+
                 batch = batch.to(self.device)
 
                 optim.zero_grad()
@@ -134,16 +139,19 @@ class ResNetVAE(nn.Module):
             train_loss = train_loss / len(tr_loader.dataset)
             train_acc = math.sqrt(train_acc / len(tr_loader.dataset))  # reconstruction score
 
-            wandb.log({'epoch': epoch + 1, 'training loss': train_loss, 'training reconstruction score': train_acc})
+            if wandb_log:
+                wandb.log({'epoch': epoch + 1, 'training loss': train_loss, 'training reconstruction score': train_acc})
 
             print(output_print.format(epoch + 1, num_epochs, train_loss, train_acc))
             #torch.cuda.empty_cache()
 
-        wandb.finish()
+        if wandb_log:
+            wandb.finish()
 
-    def test_model(self, v_loader, t_loader, num_epochs, project_name, use_test=True):
+    def test_model(self, v_loader, t_loader, num_epochs, project_name='', use_test=True, wandb_log=False):
 
-        wandb.init(project=project_name, entity='niccolomalgeri')
+        if wandb_log:
+            wandb.init(project=project_name, entity='niccolomalgeri')
 
         for epoch in range(num_epochs):
 
@@ -177,9 +185,11 @@ class ResNetVAE(nn.Module):
                 current_loss = current_loss / len(loader.dataset)
                 current_acc = math.sqrt(current_acc / len(loader.dataset))  # reconstruction score
 
-            wandb.log({'epoch': epoch + 1, wandb_print_loss: current_loss, wandb_print_acc: current_acc})
+            if wandb_log:
+                wandb.log({'epoch': epoch + 1, wandb_print_loss: current_loss, wandb_print_acc: current_acc})
 
             print(output_print.format(epoch + 1, num_epochs, current_loss, current_acc))
             #torch.cuda.empty_cache()
 
-        wandb.finish()
+        if wandb_log:
+            wandb.finish()
