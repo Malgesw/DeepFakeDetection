@@ -11,12 +11,19 @@ from torch.autograd import Variable
 import torchvision.transforms as transforms
 from tqdm.autonotebook import tqdm
 import wandb
+import matplotlib.pyplot as plt
+from sklearn.metrics import precision_recall_curve
 
 
-def loss_function(x, x_prime, mean, log_var):
+def loss_function(x, x_prime, mean, log_var, use_mean=False):
     kl_divergence = - 0.5 * torch.sum(1 + log_var - mean.pow(2) - log_var.exp())
-    #recon_loss = F.binary_cross_entropy(x_prime, x, reduction='sum')
-    recon_loss = F.mse_loss(x_prime, x, reduction='sum')
+
+    if use_mean:
+        reduction = 'mean'
+    else:
+        reduction = 'sum'
+
+    recon_loss = F.mse_loss(x_prime, x, reduction=reduction)
     return recon_loss + kl_divergence
 
 
@@ -109,10 +116,11 @@ class ResNetVAE(nn.Module):
         x_prime = self.decode(z)
         return x_prime, mu, logvar
 
-    def train_model(self, tr_loader, optim, num_epochs, project_name='', wandb_log=False):
+    def train_model(self, tr_loader, optim, num_epochs, project_name='', wandb_log=False, use_mean=False):
 
         if wandb_log:
-            wandb.init(project=project_name, entity='niccolomalgeri')
+            wandb.init(project=project_name, entity='niccolomalgeri',
+                       name='batch size: {}, loss with mse mean: {:.4f}'.format(len(tr_loader.dataset)/len(tr_loader), use_mean))
 
         output_print = 'Epoch [{}/{}], train loss: {:.4f}, train reconstruction score: {:.4f}'
 
@@ -128,7 +136,7 @@ class ResNetVAE(nn.Module):
 
                 optim.zero_grad()
                 outputs, mean, log_var = self.forward(batch)
-                loss = loss_function(batch, outputs, mean, log_var)
+                loss = loss_function(batch, outputs, mean, log_var, use_mean=use_mean)
                 loss.backward()
                 optim.step()
 
@@ -143,15 +151,20 @@ class ResNetVAE(nn.Module):
                 wandb.log({'epoch': epoch + 1, 'training loss': train_loss, 'training reconstruction score': train_acc})
 
             print(output_print.format(epoch + 1, num_epochs, train_loss, train_acc))
-            #torch.cuda.empty_cache()
 
         if wandb_log:
             wandb.finish()
 
-    def test_model(self, v_loader, t_loader, num_epochs, project_name='', use_test=True, wandb_log=False):
+    def test_model(self, v_loader, t_loader, num_epochs, project_name='', use_test=True, wandb_log=False, batch_size=50, use_mean=False,
+                   test_fake_samples=10):
 
         if wandb_log:
-            wandb.init(project=project_name, entity='niccolomalgeri')
+            wandb.init(project=project_name, entity='niccolomalgeri',
+                       name='test set?: {}, batch size: {}, loss with mse mean: {:.4f}'.format(use_test, batch_size, use_mean))
+
+        reconstruction_scores = []
+        labs = []
+        loader = None
 
         for epoch in range(num_epochs):
 
@@ -180,16 +193,49 @@ class ResNetVAE(nn.Module):
                     loss = loss_function(batch, outputs, mean, log_var)
 
                     current_loss += loss.item()
-                    current_acc += torch.sum(torch.pow((outputs - batch), 2))
+                    mse = F.mse_loss(batch, outputs, reduction='none')
+                    mse = mse.mean(dim=[1, 2, 3])
+                    #current_acc += mse.item()
+
+                    if epoch == num_epochs-1:
+                        for v in mse:
+                            reconstruction_scores.append(math.sqrt(v.cpu().item()))
+                        for label in labels:
+                            labs.append(label)
 
                 current_loss = current_loss / len(loader.dataset)
-                current_acc = math.sqrt(current_acc / len(loader.dataset))  # reconstruction score
+                #current_acc = math.sqrt(current_acc / len(loader.dataset))  # reconstruction score
 
             if wandb_log:
                 wandb.log({'epoch': epoch + 1, wandb_print_loss: current_loss, wandb_print_acc: current_acc})
 
             print(output_print.format(epoch + 1, num_epochs, current_loss, current_acc))
-            #torch.cuda.empty_cache()
+
+        x_fakes = [score for score, label in zip(reconstruction_scores, labs) if label == 0]
+        x_real = [score for score, label in zip(reconstruction_scores, labs) if label == 1]
+
+        plt.figure(figsize=(8, 8))
+        plt.hist(x_fakes, edgecolor='black', linewidth=1.2, density=True, label='Fake')
+        plt.hist(x_real, edgecolor='black', linewidth=1.2, density=True, label='Real')
+
+        plt.xlabel('Reconstruction Scores')
+        plt.ylabel('Frequency')
+        plt.title('Histogram of Image Reconstruction Scores \n(batch size: {}, test fake samples: {}/{}, epochs: {})'.format(
+            batch_size, test_fake_samples, int(len(loader.dataset)), num_epochs))
+        plt.grid(True)
+        plt.legend(loc='upper right')
+        plt.savefig('./plots/histogram.png')
+        plt.show()
+
+        precision, recall, thresholds = precision_recall_curve(labs, reconstruction_scores)
+        plt.figure(figsize=(8, 8))
+        plt.plot(recall, precision, marker='.')
+        plt.xlabel('Recall')
+        plt.ylabel('Precision')
+        plt.title('Precision-Recall Curve of Reconstruction Scores \n(batch size: {}, test fake samples: {}/{}, epochs: {})'.format(
+            batch_size, test_fake_samples, int(len(loader.dataset)), num_epochs))
+        plt.savefig('./plots/precisionrecallcurve.png')
+        plt.show()
 
         if wandb_log:
             wandb.finish()

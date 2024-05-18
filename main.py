@@ -14,6 +14,13 @@ import shutil
 import random
 
 
+def clean_folder(folder_path):
+    for filename in os.listdir(folder_path):
+        file_path = os.path.join(folder_path, filename)
+        if os.path.isfile(file_path):
+            os.remove(file_path)
+
+
 def extract_images(path_name, done=False):
 
     if not done:
@@ -37,10 +44,10 @@ def extract_images(path_name, done=False):
             shutil.rmtree(train_sub_dir_path)
 
 
-def organize_data_folder(transform, reals_path, fakes_path, main_data_path, train_percentage=0.8) -> Tuple[ImageFolder, ImageFolder]:
+def organize_data_folder(transform, reals_path, fakes_path, main_data_path, train_samples=99850, test_fake_samples=100) -> Tuple[ImageFolder, ImageFolder]:
 
-    extract_images(path_name=reals_path, done=True)
-    extract_images(path_name=fakes_path, done=True)
+    extract_images(path_name=reals_path, done=False)
+    extract_images(path_name=fakes_path, done=False)
 
     train_real_path = os.path.join(main_data_path, 'train/real')
     test_real_path = os.path.join(main_data_path, 'test/real')
@@ -50,33 +57,41 @@ def organize_data_folder(transform, reals_path, fakes_path, main_data_path, trai
     os.makedirs(test_real_path, exist_ok=True)
     os.makedirs(test_fake_path, exist_ok=True)
 
+    clean_folder(train_real_path)
+    clean_folder(test_real_path)
+    clean_folder(test_fake_path)
+
     real_images = os.listdir(reals_path)
     fake_images = os.listdir(fakes_path)
 
-    train_images = random.sample(real_images, int(len(real_images)*train_percentage))
-    test_fake_images = random.sample(fake_images, int(len(fake_images)*(1-train_percentage)))
-    test_real_images = list((set(real_images) - set(train_images)))
+    print(len(real_images))
+    print(len(fake_images))
+
+    train_images = random.sample(real_images, train_samples)
+    test_fake_images = random.sample(fake_images, test_fake_samples)  # 100 fake images
+    test_real_images = list((set(real_images) - set(train_images)))  # 100 real images
 
     for image in train_images:
         old_path = str(os.path.join(reals_path, image))
         new_path = os.path.join(train_real_path, image)
-        shutil.move(old_path, new_path)
+        shutil.copy(old_path, new_path)
 
     for image in test_real_images:
         old_path = str(os.path.join(reals_path, image))
         new_path = os.path.join(test_real_path, image)
-        shutil.move(old_path, new_path)
+        shutil.copy(old_path, new_path)
 
     for image in test_fake_images:
         old_path = str(os.path.join(fakes_path, image))
         new_path = os.path.join(test_fake_path, image)
-        shutil.move(old_path, new_path)
+        shutil.copy(old_path, new_path)
 
     train_path = os.path.join(main_data_path, 'train')
     test_path = os.path.join(main_data_path, 'test')
 
     train_set = ImageFolder(train_path, transform=transform)
     test_set = ImageFolder(test_path, transform=transform)
+    print(test_set.class_to_idx)
 
     return train_set, test_set
 
@@ -92,38 +107,29 @@ def main():
     real_path = './data/FF++/original_sequences'
     main_path = './data/FF++'
     fake_path = './data/FF++/Deepfakes'
+    test_fake_samples = 10
+    batch_size = 100
 
-    train_set, test_set = organize_data_folder(transform, real_path, fake_path, main_path, train_percentage=0.8)
+    train_set, test_set = organize_data_folder(transform, real_path, fake_path, main_path, train_samples=89950, test_fake_samples=test_fake_samples)
 
-    '''train_path = './data/CIFAKE/train/one_class_classification'
-    test_path = './data/CIFAKE/test'
-
-    train_set = ImageFolder(train_path, transform=transform)
-
-    train_size = int(0.8 * len(train_set))
-    val_size = len(train_set) - train_size
-    train_set, validation_set = torch.utils.data.random_split(train_set, [train_size, val_size])
-
-    test_set = ImageFolder(test_path, transform=transform)'''
-
-    train_loader = DataLoader(train_set, batch_size=50, shuffle=True)
-    test_loader = DataLoader(test_set, batch_size=50, shuffle=False)
+    train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True)
+    test_loader = DataLoader(test_set, batch_size=batch_size, shuffle=False)
 
     if torch.cuda.is_available():
         dev = 'cuda'
     else:
         dev = 'cpu'
 
-    #torch.cuda.empty_cache()
-
     resnet18_vae = ResNetVAE(dev, 1024, 768, 256).to(dev)
     pytorch_total_params = sum(p.numel() for p in resnet18_vae.parameters())
     print(pytorch_total_params)
     optimizer = torch.optim.Adam(resnet18_vae.parameters(), lr=3e-4)
-    resnet18_vae.train_model(train_loader, optimizer, num_epochs=20, project_name='VAEresnet18_train_FF++', wandb_log=True)
-    #resnet18_vae.test_model(test_loader, test_loader, num_epochs=15, use_test=True)
+    resnet18_vae.train_model(train_loader, optimizer, num_epochs=15, project_name='VAEresnet18_train_FF++', wandb_log=True, use_mean=True)
 
-    for batch, labels in train_loader:
+    resnet18_vae.test_model(test_loader, test_loader, num_epochs=10, project_name='VAEresnet18_test_FF++', use_test=True, wandb_log=True,
+                            batch_size=batch_size, use_mean=True, test_fake_samples=test_fake_samples)
+
+    '''for batch, labels in train_loader:
         sample = batch
         break
 
@@ -143,7 +149,7 @@ def main():
     norm_img2 = (img2 - img2.min()) / (img2.max() - img2.min())
     plt.imshow(norm_img2, interpolation='bicubic')
     plt.savefig('./plots/FF_reconstructed_image.jpg')
-    plt.show()
+    plt.show()'''
 
 
 if __name__ == "__main__":
