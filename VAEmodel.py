@@ -237,11 +237,11 @@ class ResNetVAE(nn.Module):
 
         plt.xlabel('Reconstruction Scores')
         plt.ylabel('Frequency')
-        plt.title('Histogram of Image Reconstruction Scores \n(use mean? {}, batch size: {}, test fake samples: {}/{}, epochs: {})'.format(
+        plt.title('Histogram of Image Reconstruction Scores \n(use mean: {}, batch size: {}, test fake samples: {}/{}, epochs: {})'.format(
             use_mean, batch_size, test_fake_samples, int(len(loader.dataset)), num_epochs))
         plt.grid(True)
         plt.legend(loc='upper right')
-        plt.savefig('./plots/Histograms/histogram(use mean? {}, batch size: {}, test fake samples: {} over {}, epochs: {}).jpg'.format(
+        plt.savefig('./plots/Histograms/histogram(use mean: {}, batch size: {}, test fake samples: {} over {}, epochs: {}).jpg'.format(
             use_mean, batch_size, test_fake_samples, int(len(loader.dataset)), num_epochs))
         plt.show()
 
@@ -252,9 +252,9 @@ class ResNetVAE(nn.Module):
         plt.plot(recall, precision, marker='.')
         plt.xlabel('Recall')
         plt.ylabel('Precision')
-        plt.title('Precision-Recall Curve of Reconstruction Scores \n(use mean? {}, batch size: {}, test fake samples: {}/{}, epochs: {})'.format(
+        plt.title('Precision-Recall Curve of Reconstruction Scores \n(use mean: {}, batch size: {}, test fake samples: {}/{}, epochs: {})'.format(
             use_mean, batch_size, test_fake_samples, int(len(loader.dataset)), num_epochs))
-        plt.savefig('./plots/PrecisionRecallCurves/precisionrecallcurve(use mean? {}, batch size: {}, test fake samples: {} over {}, epochs: {}).png'.format(
+        plt.savefig('./plots/PrecisionRecallCurves/precisionrecallcurve(use mean: {}, batch size: {}, test fake samples: {} over {}, epochs: {}).png'.format(
             use_mean, batch_size, test_fake_samples, int(len(loader.dataset)), num_epochs))
         plt.show()
 
@@ -272,10 +272,10 @@ class ResNetVAE(nn.Module):
 
         plt.legend(loc='upper right')
         plt.title(
-            'TSNE plot of Reconstruction Scores \n(use mean? {}, batch size: {}, test fake samples: {}/{}, epochs: {})'.format(
+            'TSNE plot of Reconstruction Scores \n(use mean: {}, batch size: {}, test fake samples: {}/{}, epochs: {})'.format(
                 use_mean, batch_size, test_fake_samples, int(len(loader.dataset)), num_epochs))
         plt.savefig(
-            './plots/TSNELatentSpace/TSNE_latent_space(use mean? {}, batch size: {}, test fake samples: {} over {}, epochs: {}).png'.format(
+            './plots/TSNELatentSpace/TSNE_latent_space(use mean: {}, batch size: {}, test fake samples: {} over {}, epochs: {}).png'.format(
                 use_mean, batch_size, test_fake_samples, int(len(loader.dataset)), num_epochs))
         plt.show()
 
