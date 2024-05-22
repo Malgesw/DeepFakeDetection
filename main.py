@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 import torchvision
 import torchvision.models as models
-from sklearn.manifold import TSNE
 from torchvision import transforms
 from torchvision.datasets import ImageFolder
 from torch.utils.data import DataLoader
@@ -96,7 +95,7 @@ def organize_data_folder(transform, reals_path, fakes_path, main_data_path, trai
     return train_set, test_set
 
 
-def main():
+def train_test_model(t_f_samples, b_sizes, use_m, model: ResNetVAE, optim, train_epochs=15, test_epochs=10):
 
     transform = transforms.Compose([
         transforms.Resize(224),
@@ -107,13 +106,25 @@ def main():
     real_path = './data/FF++/original_sequences'
     main_path = './data/FF++'
     fake_path = './data/FF++/Deepfakes'
-    test_fake_samples = 10
-    batch_size = 100
 
-    train_set, test_set = organize_data_folder(transform, real_path, fake_path, main_path, train_samples=89950, test_fake_samples=test_fake_samples)
+    for tfs in t_f_samples:
+        for bs in b_sizes:
+            for um in use_m:
 
-    train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True)
-    test_loader = DataLoader(test_set, batch_size=batch_size, shuffle=False)
+                train_set, test_set = organize_data_folder(transform, real_path, fake_path, main_path,
+                                                           train_samples=89950, test_fake_samples=tfs)
+
+                train_loader = DataLoader(train_set, batch_size=bs, shuffle=True)
+                test_loader = DataLoader(test_set, batch_size=bs, shuffle=False)
+
+                model.train_model(train_loader, optim, num_epochs=train_epochs, project_name='VAEresnet18_train_FF++',
+                                  wandb_log=True, use_mean=um)
+
+                model.test_model(test_loader, test_loader, num_epochs=test_epochs, project_name='VAEresnet18_test_FF++',
+                                 use_test=True, wandb_log=True, batch_size=bs, use_mean=um, test_fake_samples=tfs)
+
+
+def main():
 
     if torch.cuda.is_available():
         dev = 'cuda'
@@ -121,13 +132,15 @@ def main():
         dev = 'cpu'
 
     resnet18_vae = ResNetVAE(dev, 1024, 768, 256).to(dev)
-    pytorch_total_params = sum(p.numel() for p in resnet18_vae.parameters())
-    print(pytorch_total_params)
+    # pytorch_total_params = sum(p.numel() for p in resnet18_vae.parameters())
+    # print(pytorch_total_params)
     optimizer = torch.optim.Adam(resnet18_vae.parameters(), lr=3e-4)
-    resnet18_vae.train_model(train_loader, optimizer, num_epochs=15, project_name='VAEresnet18_train_FF++', wandb_log=True, use_mean=True)
 
-    resnet18_vae.test_model(test_loader, test_loader, num_epochs=10, project_name='VAEresnet18_test_FF++', use_test=True, wandb_log=True,
-                            batch_size=batch_size, use_mean=True, test_fake_samples=test_fake_samples)
+    test_fake_samples = [10, 100]
+    batch_sizes = [50, 100, 150]
+    use_mean = [True, False]
+
+    train_test_model(test_fake_samples, batch_sizes, use_mean, resnet18_vae, optimizer, 15, 10)
 
     '''for batch, labels in train_loader:
         sample = batch

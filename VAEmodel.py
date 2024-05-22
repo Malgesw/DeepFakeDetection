@@ -13,6 +13,13 @@ from tqdm.autonotebook import tqdm
 import wandb
 import matplotlib.pyplot as plt
 from sklearn.metrics import precision_recall_curve
+from sklearn.manifold import TSNE
+
+
+def scale_to_01_range(x):
+    value_range = (np.max(x) - np.min(x))
+    starts_from_zero = x - np.min(x)
+    return starts_from_zero / value_range
 
 
 def loss_function(x, x_prime, mean, log_var, use_mean=False):
@@ -114,13 +121,14 @@ class ResNetVAE(nn.Module):
         mu, logvar = self.encode(x)
         z = self.reparametrize(mu, logvar)
         x_prime = self.decode(z)
-        return x_prime, mu, logvar
+        return x_prime, mu, logvar, z
 
     def train_model(self, tr_loader, optim, num_epochs, project_name='', wandb_log=False, use_mean=False):
 
         if wandb_log:
             wandb.init(project=project_name, entity='niccolomalgeri',
-                       name='batch size: {}, loss with mse mean: {:.4f}'.format(len(tr_loader.dataset)/len(tr_loader), use_mean))
+                       name='batch size: {}, use mean?: {}, training samples: {}'.format(len(tr_loader.dataset)/len(tr_loader),
+                                                                                         use_mean, len(tr_loader.dataset)))
 
         output_print = 'Epoch [{}/{}], train loss: {:.4f}, train reconstruction score: {:.4f}'
 
@@ -135,7 +143,7 @@ class ResNetVAE(nn.Module):
                 batch = batch.to(self.device)
 
                 optim.zero_grad()
-                outputs, mean, log_var = self.forward(batch)
+                outputs, mean, log_var, _ = self.forward(batch)
                 loss = loss_function(batch, outputs, mean, log_var, use_mean=use_mean)
                 loss.backward()
                 optim.step()
@@ -158,28 +166,30 @@ class ResNetVAE(nn.Module):
     def test_model(self, v_loader, t_loader, num_epochs, project_name='', use_test=True, wandb_log=False, batch_size=50, use_mean=False,
                    test_fake_samples=10):
 
+        if use_test:
+            loader = t_loader
+            desc = 'testing the model...'
+            wandb_print_loss = 'test loss'
+            wandb_print_acc = 'test reconstruction score'
+        else:
+            loader = v_loader
+            desc = 'validating the model...'
+            wandb_print_loss = 'val loss'
+            wandb_print_acc = 'val reconstruction score'
+
+        output_print = "Epoch [{}/{}], " + wandb_print_loss + ": {:.4f}, " + wandb_print_acc + ": {:.4f}"
+
         if wandb_log:
             wandb.init(project=project_name, entity='niccolomalgeri',
-                       name='test set?: {}, batch size: {}, loss with mse mean: {:.4f}'.format(use_test, batch_size, use_mean))
+                       name='test set?: {}, batch size: {}, use mean?: {}, test fake samples: {} over {}'.format(
+                           use_test, batch_size, use_mean, test_fake_samples, int(len(loader.dataset))))
 
         reconstruction_scores = []
         labs = []
-        loader = None
+        tsne_scores = []
+        tsne_labs = []
 
         for epoch in range(num_epochs):
-
-            if use_test:
-                loader = t_loader
-                desc = 'testing the model...'
-                wandb_print_loss = 'test loss'
-                wandb_print_acc = 'test reconstruction score'
-            else:
-                loader = v_loader
-                desc = 'validating the model...'
-                wandb_print_loss = 'val loss'
-                wandb_print_acc = 'val reconstruction score'
-
-            output_print = "Epoch [{}/{}], " + wandb_print_loss + ": {:.4f}, " + wandb_print_acc + ": {:.4f}"
 
             self.eval()
             current_loss = 0.0
@@ -187,9 +197,10 @@ class ResNetVAE(nn.Module):
 
             with torch.no_grad():
                 for batch, labels in tqdm(loader, desc=desc):
+
                     batch = batch.to(self.device)
 
-                    outputs, mean, log_var = self.forward(batch)
+                    outputs, mean, log_var, latent_outputs = self.forward(batch)
                     loss = loss_function(batch, outputs, mean, log_var)
 
                     current_loss += loss.item()
@@ -198,6 +209,8 @@ class ResNetVAE(nn.Module):
                     #current_acc += mse.item()
 
                     if epoch == num_epochs-1:
+                        tsne_labs += labels
+                        tsne_scores.append(latent_outputs.cpu().numpy())
                         for v in mse:
                             reconstruction_scores.append(math.sqrt(v.cpu().item()))
                         for label in labels:
@@ -211,6 +224,10 @@ class ResNetVAE(nn.Module):
 
             print(output_print.format(epoch + 1, num_epochs, current_loss, current_acc))
 
+        # PLOTS ---------------------------------------------------------------------------------------
+        tsne_scores = np.concatenate(tsne_scores, axis=0)
+
+        # HISTOGRAM -----------------------------------------------------------------------------------
         x_fakes = [score for score, label in zip(reconstruction_scores, labs) if label == 0]
         x_real = [score for score, label in zip(reconstruction_scores, labs) if label == 1]
 
@@ -220,21 +237,46 @@ class ResNetVAE(nn.Module):
 
         plt.xlabel('Reconstruction Scores')
         plt.ylabel('Frequency')
-        plt.title('Histogram of Image Reconstruction Scores \n(batch size: {}, test fake samples: {}/{}, epochs: {})'.format(
-            batch_size, test_fake_samples, int(len(loader.dataset)), num_epochs))
+        plt.title('Histogram of Image Reconstruction Scores \n(use mean? {}, batch size: {}, test fake samples: {}/{}, epochs: {})'.format(
+            use_mean, batch_size, test_fake_samples, int(len(loader.dataset)), num_epochs))
         plt.grid(True)
         plt.legend(loc='upper right')
-        plt.savefig('./plots/histogram.png')
+        plt.savefig('./plots/Histograms/histogram(use mean? {}, batch size: {}, test fake samples: {} over {}, epochs: {}).jpg'.format(
+            use_mean, batch_size, test_fake_samples, int(len(loader.dataset)), num_epochs))
         plt.show()
+
+        # PRECISION-RECALL CURVE ----------------------------------------------------------------------
 
         precision, recall, thresholds = precision_recall_curve(labs, reconstruction_scores)
         plt.figure(figsize=(8, 8))
         plt.plot(recall, precision, marker='.')
         plt.xlabel('Recall')
         plt.ylabel('Precision')
-        plt.title('Precision-Recall Curve of Reconstruction Scores \n(batch size: {}, test fake samples: {}/{}, epochs: {})'.format(
-            batch_size, test_fake_samples, int(len(loader.dataset)), num_epochs))
-        plt.savefig('./plots/precisionrecallcurve.png')
+        plt.title('Precision-Recall Curve of Reconstruction Scores \n(use mean? {}, batch size: {}, test fake samples: {}/{}, epochs: {})'.format(
+            use_mean, batch_size, test_fake_samples, int(len(loader.dataset)), num_epochs))
+        plt.savefig('./plots/PrecisionRecallCurves/precisionrecallcurve(use mean? {}, batch size: {}, test fake samples: {} over {}, epochs: {}).png'.format(
+            use_mean, batch_size, test_fake_samples, int(len(loader.dataset)), num_epochs))
+        plt.show()
+
+        # TSNE PLOT -----------------------------------------------------------------------------------
+
+        tsne = TSNE(n_components=2).fit_transform(tsne_scores)
+        tsne_labs = list(map(int, tsne_labs))
+        tsne_labs = np.array(tsne_labs)
+        plt.figure(figsize=(8, 8))
+        colors = [0, 1]
+
+        for color in colors:
+            plt.scatter(scale_to_01_range(tsne[tsne_labs == color, 0]), scale_to_01_range(tsne[tsne_labs == color, 1]),
+                        label=('Real' if color == 1 else 'Fake'))
+
+        plt.legend(loc='upper right')
+        plt.title(
+            'TSNE plot of Reconstruction Scores \n(use mean? {}, batch size: {}, test fake samples: {}/{}, epochs: {})'.format(
+                use_mean, batch_size, test_fake_samples, int(len(loader.dataset)), num_epochs))
+        plt.savefig(
+            './plots/TSNELatentSpace/TSNE_latent_space(use mean? {}, batch size: {}, test fake samples: {} over {}, epochs: {}).png'.format(
+                use_mean, batch_size, test_fake_samples, int(len(loader.dataset)), num_epochs))
         plt.show()
 
         if wandb_log:
