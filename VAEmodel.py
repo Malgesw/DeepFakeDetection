@@ -224,6 +224,10 @@ class ResNetVAE(nn.Module):
 
             print(output_print.format(epoch + 1, num_epochs, current_loss, current_acc))
 
+        reconstruction_scores = np.array(reconstruction_scores)
+        reconstruction_scores = scale_to_01_range(reconstruction_scores).tolist()
+        print(reconstruction_scores)
+
         # PLOTS ---------------------------------------------------------------------------------------
         tsne_scores = np.concatenate(tsne_scores, axis=0)
 
@@ -231,9 +235,14 @@ class ResNetVAE(nn.Module):
         x_fakes = [score for score, label in zip(reconstruction_scores, labs) if label == 0]
         x_real = [score for score, label in zip(reconstruction_scores, labs) if label == 1]
 
+        min_val = min(min(x_fakes), min(x_real))
+        max_val = max(max(x_fakes), max(x_real))
+        num_bins = 30
+        bins = np.linspace(min_val, max_val, num_bins) # now every bin in the two histograms should be of the same width
+
         plt.figure(figsize=(8, 8))
-        plt.hist(x_fakes, edgecolor='black', linewidth=1.2, density=True, label='Fake')
-        plt.hist(x_real, edgecolor='black', linewidth=1.2, density=True, label='Real')
+        plt.hist(x_fakes, bins=bins, edgecolor='black', linewidth=1.2, density=True, label='Fake')
+        plt.hist(x_real, bins=bins, edgecolor='black', linewidth=1.2, density=True, label='Real')
 
         plt.xlabel('Reconstruction Scores')
         plt.ylabel('Frequency')
@@ -246,8 +255,10 @@ class ResNetVAE(nn.Module):
         plt.show()
 
         # PRECISION-RECALL CURVE ----------------------------------------------------------------------
-
-        precision, recall, thresholds = precision_recall_curve(labs, reconstruction_scores)
+        reversed_recon_scores = np.subtract(1, np.array(reconstruction_scores))
+        reversed_recon_scores = reversed_recon_scores.tolist()
+        print(reversed_recon_scores)
+        precision, recall, thresholds = precision_recall_curve(labs, reversed_recon_scores)
         plt.figure(figsize=(8, 8))
         plt.plot(recall, precision, marker='.')
         plt.xlabel('Recall')
@@ -259,7 +270,6 @@ class ResNetVAE(nn.Module):
         plt.show()
 
         # TSNE PLOT -----------------------------------------------------------------------------------
-
         tsne = TSNE(n_components=2).fit_transform(tsne_scores)
         tsne_labs = list(map(int, tsne_labs))
         tsne_labs = np.array(tsne_labs)
