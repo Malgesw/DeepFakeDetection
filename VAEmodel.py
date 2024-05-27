@@ -15,11 +15,26 @@ import matplotlib.pyplot as plt
 from sklearn.metrics import precision_recall_curve
 from sklearn.manifold import TSNE
 
+# VAE structure based on hsynilin19's implementation (https://github.com/hsinyilin19/ResNetVAE/tree/master)
 
-def scale_to_01_range(x):
-    value_range = (np.max(x) - np.min(x))
-    starts_from_zero = x - np.min(x)
-    return starts_from_zero / value_range
+def normalize_tensor(t: torch.Tensor, per_channel=True) -> torch.Tensor:
+
+    batch_size = t.shape[0]
+    if per_channel:
+        # each channel is normalized separately
+        min_vals = t.view(batch_size, 3, -1).min(dim=2, keepdim=True).values
+        max_vals = t.view(batch_size, 3, -1).max(dim=2, keepdim=True).values
+        min_vals = min_vals.view(batch_size, 3, 1, 1)
+        max_vals = max_vals.view(batch_size, 3, 1, 1)
+    else:
+        # single normalization for the three channels
+        min_vals = t.view(batch_size, -1).min(dim=1, keepdim=True).values
+        max_vals = t.view(batch_size, -1).max(dim=1, keepdim=True).values
+        min_vals = min_vals.view(batch_size, 1, 1, 1)
+        max_vals = max_vals.view(batch_size, 1, 1, 1)
+
+    norm_tensor = (t - min_vals) / (max_vals - min_vals)
+    return norm_tensor
 
 
 def loss_function(x, x_prime, mean, log_var, use_mean=False):
@@ -43,20 +58,20 @@ class ResNetVAE(nn.Module):
         self.fc_hidden1, self.fc_hidden2, self.CNN_embed_dim = fc_hidden1, fc_hidden2, CNN_embed_dim
 
         # CNN architectures
-        self.ch1, self.ch2, self.ch3, self.ch4 = 16, 32, 64, 128                 # number of channels
-        self.k1, self.k2, self.k3, self.k4 = (5, 5), (3, 3), (3, 3), (3, 3)      # 2d kernel size
-        self.s1, self.s2, self.s3, self.s4 = (2, 2), (2, 2), (2, 2), (2, 2)      # 2d strides
+        self.ch1, self.ch2, self.ch3, self.ch4 = 16, 32, 64, 128  # number of channels
+        self.k1, self.k2, self.k3, self.k4 = (5, 5), (3, 3), (3, 3), (3, 3)  # 2d kernel size
+        self.s1, self.s2, self.s3, self.s4 = (2, 2), (2, 2), (2, 2), (2, 2)  # 2d strides
         self.pd1, self.pd2, self.pd3, self.pd4 = (0, 0), (0, 0), (0, 0), (0, 0)  # 2d padding
 
         resnet = models.resnet18(weights='IMAGENET1K_V1')
-        modules = list(resnet.children())[:-1]      # delete the last fc layer.
+        modules = list(resnet.children())[:-1]  # delete the last fc layer.
         self.resnet = nn.Sequential(*modules)
         self.fc1 = nn.Linear(resnet.fc.in_features, self.fc_hidden1)
         self.bn1 = nn.BatchNorm1d(self.fc_hidden1, momentum=0.01)
         self.fc2 = nn.Linear(self.fc_hidden1, self.fc_hidden2)
         self.bn2 = nn.BatchNorm1d(self.fc_hidden2, momentum=0.01)
         # Latent vectors mu and sigma
-        self.fc3_mu = nn.Linear(self.fc_hidden2, self.CNN_embed_dim)      # output = CNN embedding latent variables
+        self.fc3_mu = nn.Linear(self.fc_hidden2, self.CNN_embed_dim)  # output = CNN embedding latent variables
         self.fc3_logvar = nn.Linear(self.fc_hidden2, self.CNN_embed_dim)  # output = CNN embedding latent variables
 
         # Sampling vector
@@ -84,7 +99,7 @@ class ResNetVAE(nn.Module):
             nn.ConvTranspose2d(in_channels=8, out_channels=3, kernel_size=self.k2, stride=self.s2,
                                padding=self.pd2),
             nn.BatchNorm2d(3, momentum=0.01),
-            nn.Sigmoid()    # y = (y1, y2, y3) \in [0 ,1]^3
+            nn.Sigmoid()  # y = (y1, y2, y3) \in [0 ,1]^3
         )
 
     def encode(self, x):
@@ -127,8 +142,9 @@ class ResNetVAE(nn.Module):
 
         if wandb_log:
             wandb.init(project=project_name, entity='niccolomalgeri',
-                       name='batch size: {}, use mean?: {}, training samples: {}'.format(len(tr_loader.dataset)/len(tr_loader),
-                                                                                         use_mean, len(tr_loader.dataset)))
+                       name='batch size: {}, use mean?: {}, training samples: {}'.format(
+                           len(tr_loader.dataset) / len(tr_loader),
+                           use_mean, len(tr_loader.dataset)))
 
         output_print = 'Epoch [{}/{}], train loss: {:.4f}, train reconstruction score: {:.4f}'
 
@@ -139,17 +155,21 @@ class ResNetVAE(nn.Module):
             train_acc = 0.0
 
             for batch, labels in tqdm(tr_loader, desc='training the model...'):
-
                 batch = batch.to(self.device)
 
                 optim.zero_grad()
                 outputs, mean, log_var, _ = self.forward(batch)
-                loss = loss_function(batch, outputs, mean, log_var, use_mean=use_mean)
+                norm_batch = normalize_tensor(batch, per_channel=True)
+                # print(norm_batch)
+                # print('\n')
+                # print(outputs)
+                norm_batch = norm_batch.to(self.device)
+                loss = loss_function(norm_batch, outputs, mean, log_var, use_mean=use_mean)
                 loss.backward()
                 optim.step()
 
                 train_loss += loss.item()
-                mse = F.mse_loss(batch, outputs, reduction='sum')
+                mse = F.mse_loss(norm_batch, outputs, reduction='sum')
                 train_acc += mse.item()
 
             train_loss = train_loss / len(tr_loader.dataset)
@@ -163,7 +183,8 @@ class ResNetVAE(nn.Module):
         if wandb_log:
             wandb.finish()
 
-    def test_model(self, v_loader, t_loader, num_epochs, project_name='', use_test=True, wandb_log=False, batch_size=50, use_mean=False,
+    def test_model(self, v_loader, t_loader, num_epochs, project_name='', use_test=True, wandb_log=False, batch_size=50,
+                   use_mean=False,
                    test_fake_samples=10):
 
         if use_test:
@@ -186,7 +207,7 @@ class ResNetVAE(nn.Module):
 
         reconstruction_scores = []
         labs = []
-        tsne_scores = []
+        tsne_scores = np.empty((0, self.CNN_embed_dim))
         tsne_labs = []
 
         for epoch in range(num_epochs):
@@ -201,18 +222,22 @@ class ResNetVAE(nn.Module):
                     batch = batch.to(self.device)
 
                     outputs, mean, log_var, latent_outputs = self.forward(batch)
-                    loss = loss_function(batch, outputs, mean, log_var)
+                    norm_batch = normalize_tensor(batch, per_channel=True)
+                    #print(norm_batch)
+                    #print('\n')
+                    #print(outputs)
+                    norm_batch = norm_batch.to(self.device)
+                    loss = loss_function(norm_batch, outputs, mean, log_var)
 
                     current_loss += loss.item()
-                    mse = F.mse_loss(batch, outputs, reduction='none')
+                    mse = F.mse_loss(norm_batch, outputs, reduction='none')
                     mse = mse.mean(dim=[1, 2, 3])
                     #current_acc += mse.item()
 
-                    if epoch == num_epochs-1:
+                    if epoch == num_epochs - 1:
                         tsne_labs += labels
-                        tsne_scores.append(latent_outputs.cpu().numpy())
-                        for v in mse:
-                            reconstruction_scores.append(math.sqrt(v.cpu().item()))
+                        tsne_scores = np.concatenate((tsne_scores, latent_outputs.cpu().numpy()), axis=0)
+                        reconstruction_scores.extend(mse.cpu().tolist())
                         for label in labels:
                             labs.append(label)
 
@@ -224,12 +249,10 @@ class ResNetVAE(nn.Module):
 
             print(output_print.format(epoch + 1, num_epochs, current_loss, current_acc))
 
-        reconstruction_scores = np.array(reconstruction_scores)
-        reconstruction_scores = scale_to_01_range(reconstruction_scores).tolist()
-        print(reconstruction_scores)
+        #print(reconstruction_scores)
 
         # PLOTS ---------------------------------------------------------------------------------------
-        tsne_scores = np.concatenate(tsne_scores, axis=0)
+        #print(len(reconstruction_scores))
 
         # HISTOGRAM -----------------------------------------------------------------------------------
         x_fakes = [score for score, label in zip(reconstruction_scores, labs) if label == 0]
@@ -238,7 +261,8 @@ class ResNetVAE(nn.Module):
         min_val = min(min(x_fakes), min(x_real))
         max_val = max(max(x_fakes), max(x_real))
         num_bins = 30
-        bins = np.linspace(min_val, max_val, num_bins) # now every bin in the two histograms should be of the same width
+        bins = np.linspace(min_val, max_val,
+                           num_bins)  # now every bin in the two histograms should be of the same width
 
         plt.figure(figsize=(8, 8))
         plt.hist(x_fakes, bins=bins, edgecolor='black', linewidth=1.2, density=True, label='Fake')
@@ -246,27 +270,31 @@ class ResNetVAE(nn.Module):
 
         plt.xlabel('Reconstruction Scores')
         plt.ylabel('Frequency')
-        plt.title('Histogram of Image Reconstruction Scores \n(use mean: {}, batch size: {}, test fake samples: {}/{}, epochs: {})'.format(
-            use_mean, batch_size, test_fake_samples, int(len(loader.dataset)), num_epochs))
+        plt.title(
+            'Histogram of Image Reconstruction Scores \n(use mean: {}, batch size: {}, test fake samples: {}/{}, epochs: {})'.format(
+                use_mean, batch_size, test_fake_samples, int(len(loader.dataset)), num_epochs))
         plt.grid(True)
         plt.legend(loc='upper right')
-        plt.savefig('./plots/Histograms/histogram(use mean: {}, batch size: {}, test fake samples: {} over {}, epochs: {}).jpg'.format(
-            use_mean, batch_size, test_fake_samples, int(len(loader.dataset)), num_epochs))
+        plt.savefig(
+            './plots/Histograms/histogram(use mean: {}, batch size: {}, test fake samples: {} over {}, epochs: {}).jpg'.format(
+                use_mean, batch_size, test_fake_samples, int(len(loader.dataset)), num_epochs))
         plt.show()
 
         # PRECISION-RECALL CURVE ----------------------------------------------------------------------
         reversed_recon_scores = np.subtract(1, np.array(reconstruction_scores))
         reversed_recon_scores = reversed_recon_scores.tolist()
-        print(reversed_recon_scores)
+        #print(reversed_recon_scores)
         precision, recall, thresholds = precision_recall_curve(labs, reversed_recon_scores)
         plt.figure(figsize=(8, 8))
         plt.plot(recall, precision, marker='.')
         plt.xlabel('Recall')
         plt.ylabel('Precision')
-        plt.title('Precision-Recall Curve of Reconstruction Scores \n(use mean: {}, batch size: {}, test fake samples: {}/{}, epochs: {})'.format(
-            use_mean, batch_size, test_fake_samples, int(len(loader.dataset)), num_epochs))
-        plt.savefig('./plots/PrecisionRecallCurves/precisionrecallcurve(use mean: {}, batch size: {}, test fake samples: {} over {}, epochs: {}).png'.format(
-            use_mean, batch_size, test_fake_samples, int(len(loader.dataset)), num_epochs))
+        plt.title(
+            'Precision-Recall Curve of Reconstruction Scores \n(use mean: {}, batch size: {}, test fake samples: {}/{}, epochs: {})'.format(
+                use_mean, batch_size, test_fake_samples, int(len(loader.dataset)), num_epochs))
+        plt.savefig(
+            './plots/PrecisionRecallCurves/precisionrecallcurve(use mean: {}, batch size: {}, test fake samples: {} over {}, epochs: {}).png'.format(
+                use_mean, batch_size, test_fake_samples, int(len(loader.dataset)), num_epochs))
         plt.show()
 
         # TSNE PLOT -----------------------------------------------------------------------------------
@@ -277,7 +305,7 @@ class ResNetVAE(nn.Module):
         colors = [0, 1]
 
         for color in colors:
-            plt.scatter(scale_to_01_range(tsne[tsne_labs == color, 0]), scale_to_01_range(tsne[tsne_labs == color, 1]),
+            plt.scatter(tsne[tsne_labs == color, 0], tsne[tsne_labs == color, 1],
                         label=('Real' if color == 1 else 'Fake'))
 
         plt.legend(loc='upper right')

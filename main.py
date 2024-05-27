@@ -107,9 +107,9 @@ def train_test_model(t_f_samples, b_sizes, use_m, model: ResNetVAE, optim, train
     main_path = './data/FF++'
     fake_path = './data/FF++/Deepfakes'
 
-    for tfs in t_f_samples:
+    for um in use_m:
         for bs in b_sizes:
-            for um in use_m:
+            for tfs in t_f_samples:
 
                 train_set, test_set = organize_data_folder(transform, real_path, fake_path, main_path,
                                                            train_samples=99950-tfs, test_fake_samples=tfs)
@@ -118,10 +118,10 @@ def train_test_model(t_f_samples, b_sizes, use_m, model: ResNetVAE, optim, train
                 test_loader = DataLoader(test_set, batch_size=bs, shuffle=False)
 
                 model.train_model(train_loader, optim, num_epochs=train_epochs, project_name='VAEresnet18_train_FF++',
-                                  wandb_log=False, use_mean=um)
+                                  wandb_log=True, use_mean=um)
 
                 model.test_model(test_loader, test_loader, num_epochs=test_epochs, project_name='VAEresnet18_test_FF++',
-                                 use_test=True, wandb_log=False, batch_size=bs, use_mean=um, test_fake_samples=tfs)
+                                 use_test=True, wandb_log=True, batch_size=bs, use_mean=um, test_fake_samples=tfs)
 
 
 def main():
@@ -136,13 +136,11 @@ def main():
     # print(pytorch_total_params)
     optimizer = torch.optim.Adam(resnet18_vae.parameters(), lr=3e-4)
 
-    test_fake_samples = [100, 250, 500]
-    batch_sizes = [50, 100, 150]
-    use_mean = [True, False]
+    test_fake_samples = [250, 500]
+    batch_sizes = [50]
+    use_mean = [False]
 
-    # TODO: repeat every test using the new "bin formula"
-
-    train_test_model(test_fake_samples, batch_sizes, use_mean, resnet18_vae, optimizer, 1, 1)
+    train_test_model(test_fake_samples, batch_sizes, use_mean, resnet18_vae, optimizer, 10, 10)
 
     '''for batch, labels in train_loader:
         sample = batch
