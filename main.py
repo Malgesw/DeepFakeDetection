@@ -12,6 +12,15 @@ import os
 import shutil
 import random
 
+''' TO DO LIST:
+
+1: ADD RANDOM STATE ***
+2: REMOVE SIGMOID+BATCHNORM IN LAST DECODER'S LAYER ***
+3: DO 50 EPOCHS, EVERY 10 EPOCH SAVE MODEL AND A DICTIONARY (RECONSTRUCTION SCORES, LABELS) + SAVE HYPERPARAMETERS (BOTH IN FILES .NPZ)
+4: ALSO SAVE HISTOGRAMS, PREC-RECALL CURVES AND TSNE LATENT SPACE PLOTS
+
+'''
+
 
 def clean_folder(folder_path):
     for filename in os.listdir(folder_path):
@@ -43,10 +52,14 @@ def extract_images(path_name, done=False):
             shutil.rmtree(train_sub_dir_path)
 
 
-def organize_data_folder(transform, reals_path, fakes_path, main_data_path, train_samples=99850, test_fake_samples=100) -> Tuple[ImageFolder, ImageFolder]:
+def organize_data_folder(transform, reals_path, fakes_path, main_data_path, train_samples=99850, test_fake_samples=100,
+                         random_state=None) -> Tuple[ImageFolder, ImageFolder]:
 
     extract_images(path_name=reals_path, done=True)
     extract_images(path_name=fakes_path, done=True)
+
+    if random_state is not None:
+        random.seed(random_state)
 
     train_real_path = os.path.join(main_data_path, 'train/real')
     test_real_path = os.path.join(main_data_path, 'test/real')
@@ -118,10 +131,37 @@ def train_test_model(t_f_samples, b_sizes, use_m, model: ResNetVAE, optim, train
                 test_loader = DataLoader(test_set, batch_size=bs, shuffle=False)
 
                 model.train_model(train_loader, optim, num_epochs=train_epochs, project_name='VAEresnet18_train_FF++',
-                                  wandb_log=True, use_mean=um)
+                                  wandb_log=False, use_mean=um)
 
                 model.test_model(test_loader, test_loader, num_epochs=test_epochs, project_name='VAEresnet18_test_FF++',
-                                 use_test=True, wandb_log=True, batch_size=bs, use_mean=um, test_fake_samples=tfs)
+                                 use_test=True, wandb_log=False, batch_size=bs, use_mean=um, test_fake_samples=tfs)
+
+
+def train_test_save_model(t_f_samples, b_size, use_m, model: ResNetVAE, optim, train_epochs=15, test_epochs=10):
+
+    transform = transforms.Compose([
+        transforms.Resize(224),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    ])
+
+    real_path = './data/FF++/original_sequences'
+    main_path = './data/FF++'
+    fake_path = './data/FF++/Deepfakes'
+    saved_models_path = './saved_models'
+    saved_scores_path = './saved_scores'
+
+    train_set, test_set = organize_data_folder(transform, real_path, fake_path, main_path, train_samples=99950 - t_f_samples,
+                                               test_fake_samples=t_f_samples, random_state=42)
+
+    train_loader = DataLoader(train_set, batch_size=b_size, shuffle=True)
+    test_loader = DataLoader(test_set, batch_size=b_size, shuffle=False)
+
+    model.train_test_save_model(train_loader, test_loader, optim, num_epochs=(train_epochs, test_epochs),
+                                train_project_name='VAEresnet18_train_save_FF++',
+                                test_project_name='VAEresnet18_test_save_FF++',
+                                wandb_log=True, use_mean=use_m, batch_size=b_size, test_fake_samples=t_f_samples,
+                                saved_models_path=saved_models_path, saved_scores_path=saved_scores_path)
 
 
 def main():
@@ -136,11 +176,14 @@ def main():
     # print(pytorch_total_params)
     optimizer = torch.optim.Adam(resnet18_vae.parameters(), lr=3e-4)
 
-    test_fake_samples = [250, 500]
-    batch_sizes = [50]
-    use_mean = [False]
+    test_fake_samples = 250
+    batch_size = 100
+    use_mean = False
 
-    train_test_model(test_fake_samples, batch_sizes, use_mean, resnet18_vae, optimizer, 10, 10)
+    train_test_save_model(test_fake_samples, batch_size, use_mean, resnet18_vae, optimizer, 50, 10)
+
+    #areas = torch.load('./saved_scores/PRC_AUC.pth')
+    #print(areas)
 
     '''for batch, labels in train_loader:
         sample = batch

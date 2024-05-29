@@ -10,12 +10,15 @@ import torchvision.models as models
 from torch.autograd import Variable
 import torchvision.transforms as transforms
 from tqdm.autonotebook import tqdm
+from typing import Tuple, List
+
 import wandb
 import matplotlib.pyplot as plt
-from sklearn.metrics import precision_recall_curve
+from sklearn.metrics import precision_recall_curve, average_precision_score
 from sklearn.manifold import TSNE
 
 # VAE structure based on hsynilin19's implementation (https://github.com/hsinyilin19/ResNetVAE/tree/master)
+
 
 def normalize_tensor(t: torch.Tensor, per_channel=True) -> torch.Tensor:
 
@@ -98,9 +101,13 @@ class ResNetVAE(nn.Module):
         self.convTrans8 = nn.Sequential(
             nn.ConvTranspose2d(in_channels=8, out_channels=3, kernel_size=self.k2, stride=self.s2,
                                padding=self.pd2),
-            nn.BatchNorm2d(3, momentum=0.01),
-            nn.Sigmoid()  # y = (y1, y2, y3) \in [0 ,1]^3
+            #nn.BatchNorm2d(3, momentum=0.01),
+            #nn.Sigmoid()  # y = (y1, y2, y3) \in [0 ,1]^3
         )
+
+        # PRECISION RECALL CURVES SINGLE PLOT
+        self.prec_recall_curves: List[Tuple[List[float], List[float], int]] = []
+        self.prec_recall_auc: List[float] = []
 
     def encode(self, x):
         x = self.resnet(x)
@@ -159,17 +166,17 @@ class ResNetVAE(nn.Module):
 
                 optim.zero_grad()
                 outputs, mean, log_var, _ = self.forward(batch)
-                norm_batch = normalize_tensor(batch, per_channel=True)
+                #norm_batch = normalize_tensor(batch, per_channel=True)
                 # print(norm_batch)
                 # print('\n')
                 # print(outputs)
-                norm_batch = norm_batch.to(self.device)
-                loss = loss_function(norm_batch, outputs, mean, log_var, use_mean=use_mean)
+                #norm_batch = norm_batch.to(self.device)
+                loss = loss_function(batch, outputs, mean, log_var, use_mean=use_mean)
                 loss.backward()
                 optim.step()
 
                 train_loss += loss.item()
-                mse = F.mse_loss(norm_batch, outputs, reduction='sum')
+                mse = F.mse_loss(batch, outputs, reduction='sum')
                 train_acc += mse.item()
 
             train_loss = train_loss / len(tr_loader.dataset)
@@ -184,8 +191,12 @@ class ResNetVAE(nn.Module):
             wandb.finish()
 
     def test_model(self, v_loader, t_loader, num_epochs, project_name='', use_test=True, wandb_log=False, batch_size=50,
-                   use_mean=False,
-                   test_fake_samples=10):
+                   use_mean=False, test_fake_samples=10, current_epoch=0, saved_scores_path=''):
+
+        if saved_scores_path != '':
+            path = saved_scores_path
+        else:
+            path = './plots'
 
         if use_test:
             loader = t_loader
@@ -222,15 +233,15 @@ class ResNetVAE(nn.Module):
                     batch = batch.to(self.device)
 
                     outputs, mean, log_var, latent_outputs = self.forward(batch)
-                    norm_batch = normalize_tensor(batch, per_channel=True)
+                    #norm_batch = normalize_tensor(batch, per_channel=True)
                     #print(norm_batch)
                     #print('\n')
                     #print(outputs)
-                    norm_batch = norm_batch.to(self.device)
-                    loss = loss_function(norm_batch, outputs, mean, log_var)
+                    #norm_batch = norm_batch.to(self.device)
+                    loss = loss_function(batch, outputs, mean, log_var)
 
                     current_loss += loss.item()
-                    mse = F.mse_loss(norm_batch, outputs, reduction='none')
+                    mse = F.mse_loss(batch, outputs, reduction='none')
                     mse = mse.mean(dim=[1, 2, 3])
                     #current_acc += mse.item()
 
@@ -249,10 +260,11 @@ class ResNetVAE(nn.Module):
 
             print(output_print.format(epoch + 1, num_epochs, current_loss, current_acc))
 
-        #print(reconstruction_scores)
-
         # PLOTS ---------------------------------------------------------------------------------------
-        #print(len(reconstruction_scores))
+        labs = list(map(int, labs))
+        torch.save({
+            'scores-labels': dict(zip(reconstruction_scores, labs))
+        }, saved_scores_path + '/reconstruction_scores.pth')
 
         # HISTOGRAM -----------------------------------------------------------------------------------
         x_fakes = [score for score, label in zip(reconstruction_scores, labs) if label == 0]
@@ -261,43 +273,41 @@ class ResNetVAE(nn.Module):
         min_val = min(min(x_fakes), min(x_real))
         max_val = max(max(x_fakes), max(x_real))
         num_bins = 30
-        bins = np.linspace(min_val, max_val,
-                           num_bins)  # now every bin in the two histograms should be of the same width
+        bins = np.linspace(min_val, max_val, num_bins)  # now every bin in the two histograms should be of the same width
 
         plt.figure(figsize=(8, 8))
-        plt.hist(x_fakes, bins=bins, edgecolor='black', linewidth=1.2, density=True, label='Fake')
-        plt.hist(x_real, bins=bins, edgecolor='black', linewidth=1.2, density=True, label='Real')
+        plt.hist(x_fakes, bins=bins, edgecolor='black', linewidth=1.2, density=True, alpha=0.5, label='Fake')
+        plt.hist(x_real, bins=bins, edgecolor='black', linewidth=1.2, density=True, alpha=0.5, label='Real')
 
         plt.xlabel('Reconstruction Scores')
         plt.ylabel('Frequency')
-        plt.title(
-            'Histogram of Image Reconstruction Scores \n(use mean: {}, batch size: {}, test fake samples: {}/{}, epochs: {})'.format(
-                use_mean, batch_size, test_fake_samples, int(len(loader.dataset)), num_epochs))
+        plt.title('Histogram of Image Reconstruction Scores \n(use mean: {}, batch size: {}, test fake samples: {}/{}, current epoch: {})'.format(
+            use_mean, batch_size, test_fake_samples, int(len(loader.dataset)), current_epoch))
         plt.grid(True)
         plt.legend(loc='upper right')
-        plt.savefig(
-            './plots/Histograms/histogram(use mean: {}, batch size: {}, test fake samples: {} over {}, epochs: {}).jpg'.format(
-                use_mean, batch_size, test_fake_samples, int(len(loader.dataset)), num_epochs))
+        plt.savefig(path+'/histogram(use mean: {}, batch size: {}, test fake samples: {} over {}, current epoch: {}).jpg'.format(
+            use_mean, batch_size, test_fake_samples, int(len(loader.dataset)), current_epoch))
         plt.show()
 
         # PRECISION-RECALL CURVE ----------------------------------------------------------------------
         reversed_recon_scores = np.subtract(1, np.array(reconstruction_scores))
         reversed_recon_scores = reversed_recon_scores.tolist()
-        #print(reversed_recon_scores)
+
         precision, recall, thresholds = precision_recall_curve(labs, reversed_recon_scores)
+        area_under_curve = average_precision_score(labs, reversed_recon_scores)
+        self.prec_recall_auc.append(area_under_curve)
+        self.prec_recall_curves.append((recall, precision, current_epoch))
         plt.figure(figsize=(8, 8))
         plt.plot(recall, precision, marker='.')
         plt.xlabel('Recall')
         plt.ylabel('Precision')
-        plt.title(
-            'Precision-Recall Curve of Reconstruction Scores \n(use mean: {}, batch size: {}, test fake samples: {}/{}, epochs: {})'.format(
-                use_mean, batch_size, test_fake_samples, int(len(loader.dataset)), num_epochs))
-        plt.savefig(
-            './plots/PrecisionRecallCurves/precisionrecallcurve(use mean: {}, batch size: {}, test fake samples: {} over {}, epochs: {}).png'.format(
-                use_mean, batch_size, test_fake_samples, int(len(loader.dataset)), num_epochs))
+        plt.title('Precision-Recall Curve of Reconstruction Scores \n(use mean: {}, batch size: {}, test fake samples: {}/{}, current epoch: {})'.format(
+            use_mean, batch_size, test_fake_samples, int(len(loader.dataset)), current_epoch))
+        plt.savefig(path+'/precisionrecallcurve(use mean: {}, batch size: {}, test fake samples: {} over {}, current epoch: {}).png'.format(
+            use_mean, batch_size, test_fake_samples, int(len(loader.dataset)), current_epoch))
         plt.show()
 
-        # TSNE PLOT -----------------------------------------------------------------------------------
+        # TSNE LATENT SPACE PLOT -----------------------------------------------------------------------------------
         tsne = TSNE(n_components=2).fit_transform(tsne_scores)
         tsne_labs = list(map(int, tsne_labs))
         tsne_labs = np.array(tsne_labs)
@@ -309,13 +319,84 @@ class ResNetVAE(nn.Module):
                         label=('Real' if color == 1 else 'Fake'))
 
         plt.legend(loc='upper right')
-        plt.title(
-            'TSNE plot of Reconstruction Scores \n(use mean: {}, batch size: {}, test fake samples: {}/{}, epochs: {})'.format(
-                use_mean, batch_size, test_fake_samples, int(len(loader.dataset)), num_epochs))
-        plt.savefig(
-            './plots/TSNELatentSpace/TSNE_latent_space(use mean: {}, batch size: {}, test fake samples: {} over {}, epochs: {}).png'.format(
-                use_mean, batch_size, test_fake_samples, int(len(loader.dataset)), num_epochs))
+        plt.title('TSNE plot of Reconstruction Scores \n(use mean: {}, batch size: {}, test fake samples: {}/{}, current epoch: {})'.format(
+                use_mean, batch_size, test_fake_samples, int(len(loader.dataset)), current_epoch))
+        plt.savefig(path+'/TSNE_latent_space(use mean: {}, batch size: {}, test fake samples: {} over {}, current epoch: {}).png'.format(
+                use_mean, batch_size, test_fake_samples, int(len(loader.dataset)), current_epoch))
         plt.show()
+
+        if wandb_log:
+            wandb.finish()
+
+    def train_test_save_model(self, tr_loader, t_loader, optim, num_epochs: Tuple[int, int], train_project_name='', test_project_name='', wandb_log=False,
+                              use_mean=False, batch_size=150, test_fake_samples=250, saved_models_path='', saved_scores_path=''):
+
+        if wandb_log:
+            wandb.init(project=train_project_name, entity='niccolomalgeri',
+                       name='batch size: {}, use mean?: {}, training samples: {}'.format(
+                           len(tr_loader.dataset) / len(tr_loader),
+                           use_mean, len(tr_loader.dataset)))
+
+        output_print = 'Epoch [{}/{}], train loss: {:.4f}, train reconstruction score: {:.4f}'
+
+        train_epochs, test_epochs = num_epochs
+
+        for epoch in range(train_epochs):
+
+            self.train()
+            train_loss = 0.0
+            train_acc = 0.0
+
+            for batch, labels in tqdm(tr_loader, desc='training the model...'):
+                batch = batch.to(self.device)
+
+                optim.zero_grad()
+                outputs, mean, log_var, _ = self.forward(batch)
+                loss = loss_function(batch, outputs, mean, log_var, use_mean=use_mean)
+                loss.backward()
+                optim.step()
+
+                train_loss += loss.item()
+                mse = F.mse_loss(batch, outputs, reduction='sum')
+                train_acc += mse.item()
+
+            train_loss = train_loss / len(tr_loader.dataset)
+            train_acc = math.sqrt(train_acc / len(tr_loader.dataset))  # reconstruction score
+
+            if wandb_log:
+                wandb.log({'epoch': epoch + 1, 'training loss': train_loss, 'training reconstruction score': train_acc})
+
+            print(output_print.format(epoch + 1, train_epochs, train_loss, train_acc))
+
+            if ((epoch + 1) % 10) == 0:
+
+                torch.save({
+                    'model_state_dict': self.state_dict(),
+                    'optimizer_state_dict': optim.state_dict()
+                }, saved_models_path+'/resnetVAE_'+str((epoch+1)/10)+'.pth')
+
+                self.test_model(t_loader, t_loader, num_epochs=test_epochs, project_name=test_project_name,
+                                use_test=True, wandb_log=False, batch_size=batch_size, use_mean=use_mean, test_fake_samples=test_fake_samples,
+                                current_epoch=epoch+1, saved_scores_path=saved_scores_path)
+
+        plt.figure(figsize=(8, 8))
+
+        for recall, precision, epoch in self.prec_recall_curves:
+            plt.plot(recall, precision, marker='.', label='Epoch {}'.format(epoch))
+        plt.xlabel('Recall')
+        plt.ylabel('Precision')
+        plt.title(
+            'Precision-Recall Curve of Reconstruction Scores \n(use mean: {}, batch size: {}, test fake samples: {}/{}, epochs: {})'.format(
+                use_mean, batch_size, test_fake_samples, int(len(t_loader.dataset)), test_epochs))
+        plt.legend()
+        plt.savefig(
+            './saved_scores/precisionrecallcurve(use mean: {}, batch size: {}, test fake samples: {} over {}, epochs: {}).png'.format(
+                use_mean, batch_size, test_fake_samples, int(len(t_loader.dataset)), test_epochs))
+        plt.show()
+
+        torch.save({
+            'areas_under_curve': self.prec_recall_auc
+        }, saved_scores_path+'/PRC_AUC.pth')
 
         if wandb_log:
             wandb.finish()
