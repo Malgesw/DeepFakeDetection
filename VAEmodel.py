@@ -10,18 +10,18 @@ import torchvision.models as models
 from torch.autograd import Variable
 import torchvision.transforms as transforms
 from tqdm.autonotebook import tqdm
-from typing import Tuple, List
-
+from typing import Tuple, List, Sequence
 import wandb
 import matplotlib.pyplot as plt
 from sklearn.metrics import precision_recall_curve, average_precision_score
 from sklearn.manifold import TSNE
 
+
+
 # VAE structure based on hsynilin19's implementation (https://github.com/hsinyilin19/ResNetVAE/tree/master)
 
 
 def normalize_tensor(t: torch.Tensor, per_channel=True) -> torch.Tensor:
-
     batch_size = t.shape[0]
     if per_channel:
         # each channel is normalized separately
@@ -273,7 +273,8 @@ class ResNetVAE(nn.Module):
         min_val = min(min(x_fakes), min(x_real))
         max_val = max(max(x_fakes), max(x_real))
         num_bins = 30
-        bins = np.linspace(min_val, max_val, num_bins)  # now every bin in the two histograms should be of the same width
+        bins = np.linspace(min_val, max_val,
+                           num_bins)  # now every bin in the two histograms should be of the same width
 
         plt.figure(figsize=(8, 8))
         plt.hist(x_fakes, bins=bins, edgecolor='black', linewidth=1.2, density=True, alpha=0.5, label='Fake')
@@ -281,12 +282,14 @@ class ResNetVAE(nn.Module):
 
         plt.xlabel('Reconstruction Scores')
         plt.ylabel('Frequency')
-        plt.title('Histogram of Image Reconstruction Scores \n(use mean: {}, batch size: {}, test fake samples: {}/{}, current epoch: {})'.format(
-            use_mean, batch_size, test_fake_samples, int(len(loader.dataset)), current_epoch))
+        plt.title(
+            'Histogram of Image Reconstruction Scores \n(use mean: {}, batch size: {}, test fake samples: {}/{}, current epoch: {})'.format(
+                use_mean, batch_size, test_fake_samples, int(len(loader.dataset)), current_epoch))
         plt.grid(True)
         plt.legend(loc='upper right')
-        plt.savefig(path+'/histogram(use mean: {}, batch size: {}, test fake samples: {} over {}, current epoch: {}).jpg'.format(
-            use_mean, batch_size, test_fake_samples, int(len(loader.dataset)), current_epoch))
+        plt.savefig(
+            path + '/histogram(use mean: {}, batch size: {}, test fake samples: {} over {}, current epoch: {}).jpg'.format(
+                use_mean, batch_size, test_fake_samples, int(len(loader.dataset)), current_epoch))
         plt.show()
 
         # PRECISION-RECALL CURVE ----------------------------------------------------------------------
@@ -301,10 +304,12 @@ class ResNetVAE(nn.Module):
         plt.plot(recall, precision, marker='.')
         plt.xlabel('Recall')
         plt.ylabel('Precision')
-        plt.title('Precision-Recall Curve of Reconstruction Scores \n(use mean: {}, batch size: {}, test fake samples: {}/{}, current epoch: {})'.format(
-            use_mean, batch_size, test_fake_samples, int(len(loader.dataset)), current_epoch))
-        plt.savefig(path+'/precisionrecallcurve(use mean: {}, batch size: {}, test fake samples: {} over {}, current epoch: {}).png'.format(
-            use_mean, batch_size, test_fake_samples, int(len(loader.dataset)), current_epoch))
+        plt.title(
+            'Precision-Recall Curve of Reconstruction Scores \n(use mean: {}, batch size: {}, test fake samples: {}/{}, current epoch: {})'.format(
+                use_mean, batch_size, test_fake_samples, int(len(loader.dataset)), current_epoch))
+        plt.savefig(
+            path + '/precisionrecallcurve(use mean: {}, batch size: {}, test fake samples: {} over {}, current epoch: {}).png'.format(
+                use_mean, batch_size, test_fake_samples, int(len(loader.dataset)), current_epoch))
         plt.show()
 
         # TSNE LATENT SPACE PLOT -----------------------------------------------------------------------------------
@@ -319,17 +324,21 @@ class ResNetVAE(nn.Module):
                         label=('Real' if color == 1 else 'Fake'))
 
         plt.legend(loc='upper right')
-        plt.title('TSNE plot of Reconstruction Scores \n(use mean: {}, batch size: {}, test fake samples: {}/{}, current epoch: {})'.format(
+        plt.title(
+            'TSNE plot of Reconstruction Scores \n(use mean: {}, batch size: {}, test fake samples: {}/{}, current epoch: {})'.format(
                 use_mean, batch_size, test_fake_samples, int(len(loader.dataset)), current_epoch))
-        plt.savefig(path+'/TSNE_latent_space(use mean: {}, batch size: {}, test fake samples: {} over {}, current epoch: {}).png'.format(
+        plt.savefig(
+            path + '/TSNE_latent_space(use mean: {}, batch size: {}, test fake samples: {} over {}, current epoch: {}).png'.format(
                 use_mean, batch_size, test_fake_samples, int(len(loader.dataset)), current_epoch))
         plt.show()
 
         if wandb_log:
             wandb.finish()
 
-    def train_test_save_model(self, tr_loader, t_loader, optim, num_epochs: Tuple[int, int], train_project_name='', test_project_name='', wandb_log=False,
-                              use_mean=False, batch_size=150, test_fake_samples=250, saved_models_path='', saved_scores_path=''):
+    def train_test_save_model(self, tr_loader, t_loader, optim, num_epochs: Tuple[int, int], train_project_name='',
+                              test_project_name='', wandb_log=False,
+                              use_mean=False, batch_size=150, test_fake_samples=250, saved_models_path='',
+                              saved_scores_path=''):
 
         if wandb_log:
             wandb.init(project=train_project_name, entity='niccolomalgeri',
@@ -369,15 +378,15 @@ class ResNetVAE(nn.Module):
             print(output_print.format(epoch + 1, train_epochs, train_loss, train_acc))
 
             if ((epoch + 1) % 10) == 0:
-
                 torch.save({
                     'model_state_dict': self.state_dict(),
                     'optimizer_state_dict': optim.state_dict()
-                }, saved_models_path+'/resnetVAE_'+str((epoch+1)/10)+'.pth')
+                }, saved_models_path + '/resnetVAE_' + str((epoch + 1) / 10) + '.pth')
 
                 self.test_model(t_loader, t_loader, num_epochs=test_epochs, project_name=test_project_name,
-                                use_test=True, wandb_log=False, batch_size=batch_size, use_mean=use_mean, test_fake_samples=test_fake_samples,
-                                current_epoch=epoch+1, saved_scores_path=saved_scores_path)
+                                use_test=True, wandb_log=False, batch_size=batch_size, use_mean=use_mean,
+                                test_fake_samples=test_fake_samples,
+                                current_epoch=epoch + 1, saved_scores_path=saved_scores_path)
 
         plt.figure(figsize=(8, 8))
 
@@ -396,7 +405,147 @@ class ResNetVAE(nn.Module):
 
         torch.save({
             'areas_under_curve': self.prec_recall_auc
-        }, saved_scores_path+'/PRC_AUC.pth')
+        }, saved_scores_path + '/PRC_AUC.pth')
 
         if wandb_log:
             wandb.finish()
+
+    def plots_test_model(self, t_loader, num_epochs, images_dim: Tuple[int, int, int],
+                         use_mean=False, test_fake_samples=10):
+
+        desc = 'testing the model...'
+        wandb_print_loss = 'test loss'
+        wandb_print_acc = 'test reconstruction score'
+
+        output_print = "Epoch [{}/{}], " + wandb_print_loss + ": {:.4f}, " + wandb_print_acc + ": {:.4f}"
+
+        reconstruction_scores = []
+        labs = []
+        image_errors = np.empty((0, *images_dim))
+        original_images = np.empty((0, *images_dim))
+        reconstructed_images = np.empty((0, *images_dim))
+
+        for epoch in range(num_epochs):
+
+            self.eval()
+            current_loss = 0.0
+            current_acc = 0.0
+
+            with torch.no_grad():
+                for batch, labels in tqdm(t_loader, desc=desc):
+
+                    batch = batch.to(self.device)
+
+                    outputs, mean, log_var, _ = self.forward(batch)
+                    loss = loss_function(batch, outputs, mean, log_var, use_mean=use_mean)
+
+                    current_loss += loss.item()
+
+                    mse = F.mse_loss(batch, outputs, reduction='none')
+                    mse = mse.mean(dim=[1, 2, 3])
+
+                    if epoch == num_epochs - 1:
+                        image_errors = np.concatenate((image_errors, torch.abs(torch.sub(batch, outputs)).cpu().numpy()), axis=0)
+                        original_images = np.concatenate((original_images, batch.cpu().numpy()), axis=0)
+                        reconstructed_images = np.concatenate((reconstructed_images, outputs.cpu().numpy()), axis=0)
+                        reconstruction_scores.extend(mse.cpu().tolist())
+
+                        for label in labels:
+                            labs.append(label)
+
+                current_loss = current_loss / len(t_loader.dataset)
+
+            print(output_print.format(epoch + 1, num_epochs, current_loss, current_acc))
+
+        # PLOT IMAGE ERRORS
+        print(image_errors.shape)
+        labs = list(map(int, labs))
+        real_labs = [i for i, l in enumerate(labs) if l == 1]
+        fakes_labs = [i for i, l in enumerate(labs) if l == 0]
+        real_errors = image_errors[real_labs]
+        fakes_errors = image_errors[fakes_labs]
+
+        images = {'Original real': original_images[real_labs], 'Original fakes': original_images[fakes_labs],
+                  'Reconstructed real': reconstructed_images[real_labs], 'Reconstructed fakes': reconstructed_images[fakes_labs]}
+
+        _, axs_real = plt.subplots(2, real_errors.shape[0] // 2, figsize=(10, 5))
+
+        plt.suptitle('Reconstruction errors of real test images (samples: {}/{}, test epochs: {})'.format(
+            len(t_loader.dataset) - test_fake_samples, len(t_loader.dataset), num_epochs))
+
+        for i, ax in enumerate(axs_real.flat):
+            image = np.transpose(real_errors[i], (1, 2, 0))
+            ax.imshow(image)
+            ax.axis('off')
+
+        plt.tight_layout()
+        plt.savefig('./saved_test_images/real_recon_scores(samples: {} over {}, test epochs: {}).png'.format(
+            len(t_loader.dataset) - test_fake_samples, len(t_loader.dataset), num_epochs))
+        plt.show()
+
+        _, axs_fakes = plt.subplots(2, fakes_errors.shape[0] // 2, figsize=(10, 5))
+
+        plt.suptitle('Reconstruction errors of fake test images (samples: {}/{}, test epochs: {})'.format(
+            test_fake_samples, len(t_loader.dataset), num_epochs))
+
+        for i, ax in enumerate(axs_fakes.flat):
+            image = np.transpose(fakes_errors[i], (1, 2, 0))
+            ax.imshow(image)
+            ax.axis('off')
+
+        plt.tight_layout()
+        plt.savefig('./saved_test_images/fakes_recon_scores(samples: {} over {}, test epochs: {}).png'.format(
+            test_fake_samples, len(t_loader.dataset), num_epochs))
+        plt.show()
+
+        _, axs_real_freq = plt.subplots(2, real_errors.shape[0] // 2, figsize=(10, 5))
+
+        plt.suptitle('Reconstruction errors frequencies of real test images (samples: {}/{}, test epochs: {})'.format(
+            len(t_loader.dataset)-test_fake_samples, len(t_loader.dataset), num_epochs))
+
+        for i, ax in enumerate(axs_real_freq.flat):
+
+            fft = np.fft.fftn(np.transpose(real_errors[i], (1, 2, 0)), axes=(0, 1, 2))
+            norm_fft = np.abs(fft)
+            spectrum = np.fft.fftshift(norm_fft)
+            spectrum = np.log(1 + spectrum)
+            norm_spectrum = (spectrum - spectrum.min()) / (spectrum.max() - spectrum.min())
+            ax.imshow(norm_spectrum, cmap='gray')
+            ax.axis('off')
+
+        plt.tight_layout()
+        plt.savefig('./saved_test_images/real_recon_error_freqs.png')
+        plt.show()
+
+        _, axs_fakes_freq = plt.subplots(2, fakes_errors.shape[0] // 2, figsize=(10, 5))
+
+        plt.suptitle('Reconstruction errors frequencies of fake test images (samples: {}/{}, test epochs: {})'.format(
+            test_fake_samples, len(t_loader.dataset), num_epochs))
+
+        for i, ax in enumerate(axs_fakes_freq.flat):
+
+            fft = np.fft.fftn(np.transpose(fakes_errors[i], (1, 2, 0)), axes=(0, 1, 2))
+            norm_fft = np.abs(fft)
+            spectrum = np.fft.fftshift(norm_fft)
+            spectrum = np.log(1 + spectrum)
+            norm_spectrum = (spectrum - spectrum.min()) / (spectrum.max() - spectrum.min())
+            ax.imshow(norm_spectrum, cmap='gray')
+            ax.axis('off')
+
+        plt.tight_layout()
+        plt.savefig('./saved_test_images/fakes_recon_error_freqs.png')
+        plt.show()
+
+        for t, imgs in images.items():
+            _, axs = plt.subplots(2, imgs.shape[0] // 2, figsize=(10, 5))
+
+            plt.suptitle(t)
+
+            for i, ax in enumerate(axs.flat):
+                image = np.transpose(imgs[i], (1, 2, 0))
+                ax.imshow(image)
+                ax.axis('off')
+
+            plt.tight_layout()
+            plt.savefig('./saved_test_images/' + str.lower(t) + '.png')
+            plt.show()

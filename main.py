@@ -12,15 +12,6 @@ import os
 import shutil
 import random
 
-''' TO DO LIST:
-
-1: ADD RANDOM STATE ***
-2: REMOVE SIGMOID+BATCHNORM IN LAST DECODER'S LAYER ***
-3: DO 50 EPOCHS, EVERY 10 EPOCH SAVE MODEL AND A DICTIONARY (RECONSTRUCTION SCORES, LABELS) + SAVE HYPERPARAMETERS (BOTH IN FILES .NPZ)
-4: ALSO SAVE HISTOGRAMS, PREC-RECALL CURVES AND TSNE LATENT SPACE PLOTS
-
-'''
-
 
 def clean_folder(folder_path):
     for filename in os.listdir(folder_path):
@@ -164,6 +155,26 @@ def train_test_save_model(t_f_samples, b_size, use_m, model: ResNetVAE, optim, t
                                 saved_models_path=saved_models_path, saved_scores_path=saved_scores_path)
 
 
+def plots_test_model(tr_samples, t_f_samples, b_size, use_m, model: ResNetVAE, test_epochs=10):
+
+    transform = transforms.Compose([
+        transforms.Resize(224),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    ])
+
+    real_path = './data/FF++/original_sequences'
+    main_path = './data/FF++'
+    fake_path = './data/FF++/Deepfakes'
+
+    _, test_set = organize_data_folder(transform, real_path, fake_path, main_path, train_samples=tr_samples,
+                                       test_fake_samples=t_f_samples, random_state=42)
+
+    test_loader = DataLoader(test_set, batch_size=b_size, shuffle=False)
+    model.plots_test_model(test_loader, num_epochs=test_epochs, images_dim=(3, 224, 224), use_mean=use_m,
+                           test_fake_samples=t_f_samples)
+
+
 def main():
 
     if torch.cuda.is_available():
@@ -171,41 +182,19 @@ def main():
     else:
         dev = 'cpu'
 
+    checkpoint = torch.load('./saved_models/resnetVAE_3.0.pth')  # model instance with the largest AUC
     resnet18_vae = ResNetVAE(dev, 1024, 768, 256).to(dev)
-    # pytorch_total_params = sum(p.numel() for p in resnet18_vae.parameters())
-    # print(pytorch_total_params)
     optimizer = torch.optim.Adam(resnet18_vae.parameters(), lr=3e-4)
+    resnet18_vae.load_state_dict(checkpoint['model_state_dict'])
+    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
 
-    test_fake_samples = 250
-    batch_size = 100
+    test_fake_samples = 10
+    train_samples = 99950 - test_fake_samples
+    test_batch_size = 10
     use_mean = False
 
-    train_test_save_model(test_fake_samples, batch_size, use_mean, resnet18_vae, optimizer, 50, 10)
-
-    #areas = torch.load('./saved_scores/PRC_AUC.pth')
-    #print(areas)
-
-    '''for batch, labels in train_loader:
-        sample = batch
-        break
-
-    img = sample[0]
-    output, m, v = resnet18_vae.forward(sample.to(dev))
-    #tr = transforms.Resize(32)
-    #img = tr(img)
-    img = img.permute(1, 2, 0).detach().numpy()
-    norm_img = (img - img.min()) / (img.max() - img.min())
-    plt.imshow(norm_img, interpolation='bicubic')
-    plt.savefig('./plots/FF_input_image.jpg')
-    plt.show()
-
-    img2 = output[0]
-    #img2 = tr(img2)
-    img2 = img2.permute(1, 2, 0).cpu().detach().numpy()
-    norm_img2 = (img2 - img2.min()) / (img2.max() - img2.min())
-    plt.imshow(norm_img2, interpolation='bicubic')
-    plt.savefig('./plots/FF_reconstructed_image.jpg')
-    plt.show()'''
+    plots_test_model(train_samples, test_fake_samples, test_batch_size, use_mean, resnet18_vae, test_epochs=10)
+    # train_test_save_model(test_fake_samples, batch_size, use_mean, resnet18_vae, optimizer, 50, 10)
 
 
 if __name__ == "__main__":
